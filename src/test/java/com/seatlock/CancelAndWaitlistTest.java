@@ -81,6 +81,7 @@ class CancelAndWaitlistTest {
         assertThatThrownBy(() -> bookings.book(dave, ev.id(), List.of(ids.get(0)), null))
                 .isInstanceOf(BookingService.SeatUnavailableException.class);
         assertThat(bookings.book(bob, ev.id(), List.of(ids.get(0)), null).status()).isEqualTo("CONFIRMED");
+        assertThat(waitlist.statusFor(bob, ev.id()).joined()).as("booking takes you off the waitlist").isFalse();
     }
 
     @Test

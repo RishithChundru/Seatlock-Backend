@@ -5,6 +5,7 @@ import com.seatlock.domain.Event;
 import com.seatlock.domain.EventImage;
 import com.seatlock.domain.Repositories.*;
 import com.seatlock.domain.Seat;
+import com.seatlock.service.SeatRows.SeatRow;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
@@ -28,41 +29,40 @@ public class EventService {
     private final SeatRepository seats;
     private final SeatHoldService holds;
     private final EventImageRepository images;
+    private final SeatRows seatRows;
 
-    public EventService(EventRepository events, SeatRepository seats, SeatHoldService holds, EventImageRepository images) {
+    public EventService(EventRepository events, SeatRepository seats, SeatHoldService holds, EventImageRepository images,
+                        SeatRows seatRows) {
         this.events = events;
         this.seats = seats;
         this.holds = holds;
         this.images = images;
+        this.seatRows = seatRows;
     }
 
-    @Cacheable(LIST_CACHE)
-    @Transactional(readOnly = true)
+    // Cached reads are deliberately not @Transactional: a cache hit must not borrow a pooled DB connection.
+    @Cacheable(value = LIST_CACHE, sync = true) // sync: one rebuild per instance after eviction, not a stampede
     public List<EventDto> list() {
         // shortcut: 2 count queries per event, fine for dozens of events (and cached); use one GROUP BY query when it grows
         return new ArrayList<>(events.findAllByOrderByStartsAtAsc().stream().map(this::toDto).toList());
     }
 
-    @Cacheable(ITEM_CACHE)
-    @Transactional(readOnly = true)
+    @Cacheable(value = ITEM_CACHE, sync = true)
     public EventDto get(Long id) {
         return toDto(events.findById(id).orElseThrow(() -> new NoSuchElementException("Event not found")));
     }
 
-    /** Not cached: holds change every few seconds and the map must be live. */
-    @Transactional(readOnly = true)
+    /** Sold seats come from the cached SeatRows; live holds are overlaid from Redis on every call. No DB on a hit. */
     public List<SeatDto> seats(Long eventId, Long viewerId) {
-        if (!events.existsById(eventId)) throw new NoSuchElementException("Event not found");
-        List<Seat> list = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId);
-        Map<Long, Long> held = holds.holders(list.stream().map(Seat::getId).toList());
+        List<SeatRow> rows = seatRows.forEvent(eventId);
+        Map<Long, Long> held = holds.holders(rows.stream().map(SeatRow::id).toList());
         List<Long> mine = held.entrySet().stream().filter(h -> h.getValue().equals(viewerId)).map(Map.Entry::getKey).toList();
         Map<Long, Instant> expiries = holds.expiries(mine); // at most 10 seats per viewer
-        return list.stream().map(s -> {
-            Long holder = held.get(s.getId());
-            boolean booked = s.getStatus() == Seat.Status.BOOKED;
-            String status = booked ? "BOOKED" : holder != null ? "HELD" : "AVAILABLE";
-            boolean isMine = !booked && holder != null && holder.equals(viewerId);
-            return new SeatDto(s.getId(), s.getRowLabel(), s.getSeatNumber(), status, isMine, isMine ? expiries.get(s.getId()) : null);
+        return rows.stream().map(s -> {
+            Long holder = held.get(s.id());
+            String status = s.booked() ? "BOOKED" : holder != null ? "HELD" : "AVAILABLE";
+            boolean isMine = !s.booked() && holder != null && holder.equals(viewerId);
+            return new SeatDto(s.id(), s.row(), s.number(), status, isMine, isMine ? expiries.get(s.id()) : null);
         }).toList();
     }
 

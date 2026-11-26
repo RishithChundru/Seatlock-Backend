@@ -9,6 +9,7 @@ import com.seatlock.service.BookingService.BookingCancelled;
 import com.seatlock.service.BookingService.BookingCommitted;
 import com.seatlock.service.EventService;
 import com.seatlock.service.SeatHoldService;
+import com.seatlock.service.SeatRows;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -38,14 +39,18 @@ class BookingEvents {
         this.updates = updates;
     }
 
-    /** Runs only after the booking transaction commits, so we never announce a booking that rolled back. */
+    /**
+     * Runs only after the booking transaction commits, so we never announce a booking that rolled back.
+     * No DB access here on purpose: the committing transaction still holds its connection while this runs,
+     * and opening a second one per booking deadlocked the pool under load (found with k6).
+     */
     @TransactionalEventListener
-    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
-                      @CacheEvict(value = EventService.ITEM_CACHE, key = "#e.eventId")})
-    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, readOnly = true)
+    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true, beforeInvocation = true),
+                      @CacheEvict(value = EventService.ITEM_CACHE, key = "#e.eventId", beforeInvocation = true),
+                      @CacheEvict(value = SeatRows.CACHE, key = "#e.eventId", beforeInvocation = true)})
     public void onCommit(BookingCommitted e) {
         e.seatIds().forEach(id -> holds.release(e.userId(), id));
-        bookings.findById(e.bookingId()).ifPresent(this::publish);
+        send(new BookingConfirmed(e.bookingId(), e.email(), e.eventTitle(), e.seatLabels()));
         updates.publish(e.eventId());
     }
 
@@ -54,9 +59,11 @@ class BookingEvents {
      * the consumer once offers are made, so people in line get first claim. If RabbitMQ is down the seats
      * are simply back on general sale.
      */
+    // Evict before publishing: the waitlist consumer must see the freed seats, not a stale cached map.
     @TransactionalEventListener
-    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
-                      @CacheEvict(value = EventService.ITEM_CACHE, key = "#e.eventId")})
+    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true, beforeInvocation = true),
+                      @CacheEvict(value = EventService.ITEM_CACHE, key = "#e.eventId", beforeInvocation = true),
+                      @CacheEvict(value = SeatRows.CACHE, key = "#e.eventId", beforeInvocation = true)})
     public void onCancel(BookingCancelled e) {
         try {
             rabbit.convertAndSend(RabbitConfig.SEATS_RELEASED, new SeatsReleased(e.eventId(), e.seatIds()));
@@ -81,11 +88,14 @@ class BookingEvents {
     }
 
     private void publish(Booking b) {
+        send(new BookingConfirmed(b.getId(), b.getUser().getEmail(), b.getEvent().getTitle(), b.seatLabels()));
+    }
+
+    private void send(BookingConfirmed msg) {
         try {
-            var msg = new BookingConfirmed(b.getId(), b.getUser().getEmail(), b.getEvent().getTitle(), b.seatLabels());
             rabbit.convertAndSend(RabbitConfig.QUEUE, msg);
         } catch (RuntimeException ex) {
-            log.error("Could not publish booking {}; the sweeper will retry", b.getId(), ex);
+            log.error("Could not publish booking {}; the sweeper will retry", msg.bookingId(), ex);
         }
     }
 }

@@ -19,7 +19,9 @@ public class BookingService {
         public SeatUnavailableException() { super("One or more selected seats were just booked by someone else"); }
     }
 
-    public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds) {}
+    /** Carries everything the after-commit work needs, so that work never borrows a second DB connection. */
+    public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds,
+                                   String email, String eventTitle, List<String> seatLabels) {}
     public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds) {}
 
     private final BookingRepository bookings;
@@ -27,15 +29,17 @@ public class BookingService {
     private final EventRepository events;
     private final UserRepository users;
     private final SeatHoldService holds;
+    private final WaitlistRepository waitlist;
     private final ApplicationEventPublisher publisher;
 
     public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users,
-                          SeatHoldService holds, ApplicationEventPublisher publisher) {
+                          SeatHoldService holds, WaitlistRepository waitlist, ApplicationEventPublisher publisher) {
         this.bookings = bookings;
         this.seats = seats;
         this.events = events;
         this.users = users;
         this.holds = holds;
+        this.waitlist = waitlist;
         this.publisher = publisher;
     }
 
@@ -66,8 +70,10 @@ public class BookingService {
         selected.forEach(s -> s.book(booking));
         booking.recordSeatLabels();
         seats.saveAllAndFlush(selected); // version check fires here, inside the transaction
+        waitlist.deleteByEventIdAndUserId(eventId, userId); // got a seat: no longer waiting for this event
         // Delivered only after commit (see BookingEvents): evict cache, release holds, publish to RabbitMQ.
-        publisher.publishEvent(new BookingCommitted(booking.getId(), userId, eventId, seatIds));
+        publisher.publishEvent(new BookingCommitted(booking.getId(), userId, eventId, seatIds,
+                user.getEmail(), event.getTitle(), booking.seatLabels()));
         return BookingDto.of(booking);
     }
 

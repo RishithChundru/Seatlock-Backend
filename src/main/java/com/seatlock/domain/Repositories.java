@@ -30,6 +30,7 @@ public final class Repositories {
         Optional<WaitlistEntry> findFirstByEventIdAndOfferedSeatIdIsNullOrderByIdAsc(Long eventId);
         long countByEventIdAndOfferedSeatIdIsNullAndIdLessThanEqual(Long eventId, Long id);
         List<WaitlistEntry> findByUserIdOrderByCreatedAtDesc(Long userId);
+        void deleteByEventIdAndUserId(Long eventId, Long userId);
     }
 
     public interface BookingRepository extends JpaRepository<Booking, Long> {

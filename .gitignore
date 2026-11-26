@@ -36,3 +36,6 @@ build/
 data/
 .env*
 !.env.example
+
+### k6 output (machine-specific) ###
+load/last-summary.json

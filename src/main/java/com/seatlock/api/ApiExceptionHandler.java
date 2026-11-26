@@ -2,9 +2,12 @@ package com.seatlock.api;
 
 import com.seatlock.service.BookingService.SeatUnavailableException;
 import com.seatlock.service.WaitlistService;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -28,6 +31,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(org.springframework.data.redis.RedisConnectionFailureException.class)
     ProblemDetail redisDown() {
         return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "Seat holds are temporarily unavailable, please retry");
+    }
+
+    /** DB pool exhausted or database unreachable: tell clients to back off and retry, don't 500. */
+    @ExceptionHandler({CannotCreateTransactionException.class, DataAccessResourceFailureException.class})
+    ResponseEntity<ProblemDetail> overloaded() {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header("Retry-After", "2")
+                .body(ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "We're busy right now. Please try again in a moment."));
     }
 
     @ExceptionHandler(WaitlistService.SeatsStillAvailableException.class)

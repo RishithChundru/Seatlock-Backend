@@ -2,8 +2,8 @@ package com.seatlock.service;
 
 import com.seatlock.api.Dtos.HoldResponse;
 import com.seatlock.domain.Repositories.SeatRepository;
-import com.seatlock.domain.Seat;
 import com.seatlock.realtime.SeatUpdates;
+import com.seatlock.service.SeatRows.SeatRow;
 import com.seatlock.service.BookingService.SeatUnavailableException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -31,25 +31,28 @@ public class SeatHoldService {
     private final StringRedisTemplate redis;
     private final SeatRepository seats;
     private final SeatUpdates updates;
+    private final SeatRows seatRows;
 
-    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats, SeatUpdates updates) {
+    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats, SeatUpdates updates, SeatRows seatRows) {
         this.redis = redis;
         this.seats = seats;
         this.updates = updates;
+        this.seatRows = seatRows;
     }
 
     static String key(Long seatId) { return "hold:seat:" + seatId; }
 
     public HoldResponse hold(Long userId, Long eventId, List<Long> seatIds) {
-        List<Seat> eventSeats = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId);
-        Map<Long, Seat> byId = new HashMap<>();
-        eventSeats.forEach(s -> byId.put(s.getId(), s));
+        // Cached seat rows: no DB connection on the hot path. If stale, booking's @Version check still decides.
+        List<SeatRow> eventSeats = seatRows.forEvent(eventId);
+        Map<Long, SeatRow> byId = new HashMap<>();
+        eventSeats.forEach(s -> byId.put(s.id(), s));
         if (new HashSet<>(seatIds).size() != seatIds.size() || !byId.keySet().containsAll(seatIds))
             throw new IllegalArgumentException("Seats do not belong to this event");
-        if (seatIds.stream().anyMatch(id -> byId.get(id).getStatus() != Seat.Status.AVAILABLE))
+        if (seatIds.stream().anyMatch(id -> byId.get(id).booked()))
             throw new SeatUnavailableException();
 
-        Map<Long, Long> holders = holders(eventSeats.stream().map(Seat::getId).toList());
+        Map<Long, Long> holders = holders(eventSeats.stream().map(SeatRow::id).toList());
         String me = userId.toString();
         long alreadyMine = holders.values().stream().filter(userId::equals).count();
         long fresh = seatIds.stream().filter(id -> !userId.equals(holders.get(id))).count();
