@@ -1,3 +1,6 @@
+# Fixed project name so containers/volumes don't change if the folder is renamed
+name: seatlock
+
 services:
   postgres:
     image: postgres:17-alpine
