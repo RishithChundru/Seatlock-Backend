@@ -5,6 +5,7 @@ import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.UserRepository;
 import com.seatlock.service.BookingService;
 import com.seatlock.service.EventService;
+import com.seatlock.service.SeatHoldService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -75,11 +76,32 @@ final class Controllers {
         EventDto get(@PathVariable Long id) { return events.get(id); }
 
         @GetMapping("/{id}/seats")
-        List<SeatDto> seats(@PathVariable Long id) { return events.seats(id); }
+        List<SeatDto> seats(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
+            return events.seats(id, user == null ? null : Long.valueOf(user.getSubject()));
+        }
 
         @PostMapping
         @ResponseStatus(HttpStatus.CREATED)
         EventDto create(@Valid @RequestBody CreateEventRequest r) { return events.create(r); }
+    }
+
+    @RestController
+    @RequestMapping("/api/holds")
+    static class HoldController {
+        private final SeatHoldService holds;
+
+        HoldController(SeatHoldService holds) { this.holds = holds; }
+
+        @PostMapping
+        HoldResponse hold(@AuthenticationPrincipal Jwt user, @Valid @RequestBody HoldRequest r) {
+            return holds.hold(Long.valueOf(user.getSubject()), r.eventId(), r.seatIds());
+        }
+
+        @DeleteMapping("/{seatId}")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void release(@AuthenticationPrincipal Jwt user, @PathVariable Long seatId) {
+            holds.release(Long.valueOf(user.getSubject()), seatId);
+        }
     }
 
     @RestController

@@ -3,6 +3,7 @@ package com.seatlock.service;
 import com.seatlock.api.Dtos.BookingDto;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,16 +18,23 @@ public class BookingService {
         public SeatUnavailableException() { super("One or more selected seats were just booked by someone else"); }
     }
 
+    public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds) {}
+
     private final BookingRepository bookings;
     private final SeatRepository seats;
     private final EventRepository events;
     private final UserRepository users;
+    private final SeatHoldService holds;
+    private final ApplicationEventPublisher publisher;
 
-    public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users) {
+    public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users,
+                          SeatHoldService holds, ApplicationEventPublisher publisher) {
         this.bookings = bookings;
         this.seats = seats;
         this.events = events;
         this.users = users;
+        this.holds = holds;
+        this.publisher = publisher;
     }
 
     /**
@@ -50,9 +58,13 @@ public class BookingService {
         if (selected.stream().anyMatch(s -> s.getStatus() != Seat.Status.AVAILABLE))
             throw new SeatUnavailableException();
 
+        holds.assertBookable(userId, seatIds);
+
         Booking booking = bookings.save(new Booking(user, event, event.getPriceCents() * selected.size(), idempotencyKey));
         selected.forEach(s -> s.book(booking));
         seats.saveAllAndFlush(selected); // version check fires here, inside the transaction
+        // Delivered only after commit (see BookingEvents): evict cache, release holds, publish to RabbitMQ.
+        publisher.publishEvent(new BookingCommitted(booking.getId(), userId, eventId, seatIds));
         return BookingDto.of(booking);
     }
 

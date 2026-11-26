@@ -3,6 +3,7 @@ package com.seatlock.api;
 import com.seatlock.domain.*;
 import jakarta.validation.constraints.*;
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.util.List;
 
@@ -13,21 +14,28 @@ public final class Dtos {
         public static UserDto of(AppUser u) { return new UserDto(u.getId(), u.getEmail(), u.getName(), u.getRole().name()); }
     }
 
+    // Serializable: cached in Redis
     public record EventDto(Long id, String title, String venue, String category, Instant startsAt,
-                           int priceCents, long totalSeats, long availableSeats) {}
+                           int priceCents, long totalSeats, long availableSeats) implements Serializable {}
 
-    public record SeatDto(Long id, String row, int number, String status) {
-        public static SeatDto of(Seat s) { return new SeatDto(s.getId(), s.getRowLabel(), s.getSeatNumber(), s.getStatus().name()); }
-    }
+    /** status: AVAILABLE, BOOKED, or HELD (in someone's 5-minute checkout hold). mine = held by the caller. */
+    public record SeatDto(Long id, String row, int number, String status, boolean mine) {}
 
     public record BookingDto(Long id, Long eventId, String eventTitle, String venue, Instant startsAt,
-                             int totalCents, Instant createdAt, List<String> seats) {
+                             int totalCents, Instant createdAt, List<String> seats, String ticketCode) {
         public static BookingDto of(Booking b) {
             return new BookingDto(b.getId(), b.getEvent().getId(), b.getEvent().getTitle(), b.getEvent().getVenue(),
                     b.getEvent().getStartsAt(), b.getTotalCents(), b.getCreatedAt(),
-                    b.getSeats().stream().map(s -> s.getRowLabel() + s.getSeatNumber()).toList());
+                    b.getSeats().stream().map(s -> s.getRowLabel() + s.getSeatNumber()).toList(), b.getTicketCode());
         }
     }
+
+    public record HoldRequest(@NotNull Long eventId, @NotEmpty @Size(max = 10) List<@NotNull Long> seatIds) {}
+
+    public record HoldResponse(List<Long> seatIds, Instant expiresAt) {}
+
+    /** Published to RabbitMQ after a booking commits. */
+    public record BookingConfirmed(Long bookingId, String email, String eventTitle, List<String> seats) {}
 
     public record BookingRequest(@NotNull Long eventId, @NotEmpty @Size(max = 10) List<@NotNull Long> seatIds) {}
 

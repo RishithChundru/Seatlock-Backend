@@ -1,74 +1,86 @@
 # SeatLock: concurrency-safe seat booking
 
-Spring Boot 4 + PostgreSQL backend and Next.js 16 frontend for booking event seats. **Two people can never book the same seat**, even when they tap it in the same millisecond.
+Spring Boot 4 backend (PostgreSQL, Redis, RabbitMQ) with a Next.js 16 frontend for booking event seats. **Two people can never book the same seat**, even when they tap it in the same millisecond.
 
 ```
-Next.js (React 19, Tailwind)  ──REST + JWT──▶  Spring Boot (Web MVC, Security, JPA)  ──▶  PostgreSQL
-  live seat map (4s refresh)                    optimistic locking (@Version)
-  Idempotency-Key per checkout                  idempotent bookings, ProblemDetail errors
+                                  ┌──────────── Redis ─────────────┐
+                                  │ hold:seat:{id}  SET NX EX 300  │  checkout holds
+                                  │ events::*       TTL 60s        │  listing cache
+                                  └───────────────▲────────────────┘
+Next.js ──REST + JWT──▶ Spring Boot ──────────────┤
+ live seat map                │                   ▼
+ hold countdown               │             PostgreSQL  (@Version optimistic lock = final guarantee)
+ Idempotency-Key              │ after commit
+                              ▼
+                RabbitMQ  booking.confirmed ──▶ TicketIssuer (idempotent consumer)
+                              │ 3 failed attempts
+                              ▼
+                          booking.confirmed.dlq
 ```
 
-## The hard problem: double-booking
+## How double-booking is prevented (two layers)
 
-`Seat` has a `@Version` column. Booking runs in one transaction:
+**1. Redis checkout holds (UX layer).** Tapping a seat runs `SET hold:seat:{id} {userId} NX EX 300`. `NX` means exactly one user wins the seat; `EX` makes abandoned holds expire on their own without a cleanup job. Other users see the seat as "in someone's cart". A user can hold at most 10 seats per event, multi-seat holds are all-or-nothing, and a seat is released only by its owner (a compare-and-delete Lua script).
 
-1. Load the requested seats and reject any already `BOOKED` (fast path).
-2. Insert the `Booking`, mark seats `BOOKED`, flush. Hibernate issues `UPDATE seats ... WHERE id = ? AND version = ?`.
-3. If another transaction got there first, the version no longer matches, 0 rows update, and Hibernate throws `ObjectOptimisticLockingFailureException`. The whole transaction rolls back (including the booking row) and the API returns **409 Conflict**.
+**2. Optimistic locking in Postgres (correctness layer).** `Seat` has a `@Version` column. Booking flushes `UPDATE seats ... WHERE id = ? AND version = ?`. If another transaction got there first (for example a hold expired mid-checkout), 0 rows update, Hibernate throws `ObjectOptimisticLockingFailureException`, the whole transaction rolls back and the API returns **409 Conflict**. Even if Redis is wrong or down, the database never double-books.
 
-**Idempotency:** clients send an `Idempotency-Key` header. A retry with the same key (double-click, flaky network) returns the original booking instead of creating a second one. Enforced by a unique `(user_id, idempotency_key)` constraint.
+**Idempotency:** clients send an `Idempotency-Key` header. A retry with the same key (double-click, flaky network) returns the original booking instead of creating a second one. This is enforced by a unique `(user_id, idempotency_key)` constraint.
 
-**Proof:** [`BookingConcurrencyTest`](src/test/java/com/seatlock/BookingConcurrencyTest.java) fires 50 threads at the same seat simultaneously and asserts exactly 1 booking succeeds and 49 are rejected.
+## Async ticketing with RabbitMQ
 
-## Features
+After the booking transaction **commits** (`@TransactionalEventListener`), the service evicts the cache, releases the holds and publishes `BookingConfirmed` to the `booking.confirmed` queue. `TicketIssuer` consumes it, generates a ticket code and "emails" it (logged).
 
-- JWT auth (HS256, Spring Security resource server), BCrypt passwords, `USER` / `ADMIN` roles
-- Events, seat maps, bookings, "my tickets"; admins can create events (`POST /api/events`)
-- Errors as RFC 7807 `ProblemDetail` JSON
-- Next.js UI: event grid, interactive seat map with live refresh, booking confirmation, tickets page, mobile layout
+- **Retries + DLQ:** 3 attempts with backoff, then the message is dead-lettered to `booking.confirmed.dlq` instead of being retried forever.
+- **Idempotent consumer:** a redelivered message for an already-ticketed booking is a no-op.
+- **No lost messages:** if RabbitMQ is down at commit time, a scheduled sweeper re-publishes bookings that still have no ticket after 1 minute.
+
+## Tests (real infrastructure)
+
+[`BookingConcurrencyTest`](src/test/java/com/seatlock/BookingConcurrencyTest.java) runs against real Postgres, Redis and RabbitMQ containers (Testcontainers):
+
+| Test | Result |
+|---|---|
+| 50 threads book the same seat at the same instant | exactly 1 booking, 49 rejected, losers' rows rolled back |
+| 50 users hold the same seat at the same instant | exactly 1 holder |
+| Book a seat someone else holds | rejected (409) |
+| Retry with the same Idempotency-Key | same booking returned |
+| Booking → RabbitMQ → ticket issued | ticket code appears asynchronously |
 
 ## Run it
 
-Requires Java 21+. Maven is not needed; the wrapper downloads it.
-
-**With PostgreSQL (Docker):**
+Requires Java 21+ and Docker. Maven is not needed; the wrapper downloads it.
 
 ```powershell
 docker compose up -d
 .\mvnw.cmd spring-boot:run
 ```
 
-**Without Docker (H2 file DB):**
-
-```powershell
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=h2"
-```
-
-The API runs on http://localhost:8080. For the UI, run the SeatLock frontend repo (Next.js) and open http://localhost:3000. Demo logins (seeded on first run):
+The API runs on http://localhost:8080 and the RabbitMQ UI on http://localhost:15672 (guest/guest). For the UI, run the SeatLock frontend repo and open http://localhost:3000. Demo logins (seeded on first run):
 
 | Role  | Email               | Password    |
 |-------|---------------------|-------------|
 | User  | demo@seatlock.dev   | Demo@12345  |
 | Admin | admin@seatlock.dev  | Admin@12345 |
 
-**Tests:** `.\mvnw.cmd test`
+**Tests:** `.\mvnw.cmd test` (needs Docker running)
 
-Config via env vars: `DB_URL`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET` (32+ bytes), `CORS_ORIGIN`, and `NEXT_PUBLIC_API_URL` for the frontend.
+Config via env vars: `DB_URL`, `DB_USER`, `DB_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`, `RABBIT_HOST`, `RABBIT_USER`, `RABBIT_PASSWORD`, `JWT_SECRET` (32+ bytes), `CORS_ORIGIN`.
 
 ## API
 
 | Method | Path | Auth |
 |---|---|---|
 | POST | `/api/auth/register`, `/api/auth/login` | public |
-| GET | `/api/events`, `/api/events/{id}`, `/api/events/{id}/seats` | public |
+| GET | `/api/events`, `/api/events/{id}` (cached) | public |
+| GET | `/api/events/{id}/seats` (`HELD` / `mine` reflect live holds) | public |
 | POST | `/api/events` | ADMIN |
+| POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min | USER |
+| DELETE | `/api/holds/{seatId}` | USER |
 | POST | `/api/bookings` (`Idempotency-Key` header optional) | USER |
-| GET | `/api/bookings/me` | USER |
+| GET | `/api/bookings/me` (includes `ticketCode` once issued) | USER |
 
 ## Roadmap
 
-- Redis seat holds (5-minute TTL while paying) and Redis cache for event listings
-- RabbitMQ/Kafka `BookingConfirmed` event → email/ticket consumer
-- Flyway migrations, Swagger UI, Testcontainers (Postgres) tests
-- k6 load test with published p95 numbers
+- k6 load test with published p95 numbers and cache hit/miss latency
+- Flyway migrations, Swagger UI
 - Booking cancellation

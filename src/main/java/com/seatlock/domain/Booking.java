@@ -20,6 +20,9 @@ public class Booking {
     private Instant createdAt = Instant.now();
     @Column(name = "idempotency_key", length = 100)
     private String idempotencyKey;
+    @Column(length = 20)
+    private String ticketCode;
+    private Instant ticketIssuedAt;
     @OneToMany(mappedBy = "booking")
     @OrderBy("rowLabel, seatNumber")
     private List<Seat> seats = new ArrayList<>();
@@ -39,4 +42,11 @@ public class Booking {
     public int getTotalCents() { return totalCents; }
     public Instant getCreatedAt() { return createdAt; }
     public List<Seat> getSeats() { return seats; }
+    public String getTicketCode() { return ticketCode; }
+    public boolean isTicketIssued() { return ticketIssuedAt != null; }
+
+    public void issueTicket(String code) {
+        this.ticketCode = code;
+        this.ticketIssuedAt = Instant.now();
+    }
 }

@@ -26,5 +26,6 @@ public final class Repositories {
     public interface BookingRepository extends JpaRepository<Booking, Long> {
         List<Booking> findByUserIdOrderByCreatedAtDesc(Long userId);
         Optional<Booking> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
+        List<Booking> findTop100ByTicketIssuedAtIsNullAndCreatedAtBefore(java.time.Instant cutoff);
     }
 }
