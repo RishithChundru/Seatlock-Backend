@@ -25,6 +25,13 @@ public final class Repositories {
         long countByEventIdAndStatus(Long eventId, Seat.Status status);
     }
 
+    public interface WaitlistRepository extends JpaRepository<WaitlistEntry, Long> {
+        Optional<WaitlistEntry> findByEventIdAndUserId(Long eventId, Long userId);
+        Optional<WaitlistEntry> findFirstByEventIdAndOfferedSeatIdIsNullOrderByIdAsc(Long eventId);
+        long countByEventIdAndOfferedSeatIdIsNullAndIdLessThanEqual(Long eventId, Long id);
+        List<WaitlistEntry> findByUserIdOrderByCreatedAtDesc(Long userId);
+    }
+
     public interface BookingRepository extends JpaRepository<Booking, Long> {
         List<Booking> findByUserIdOrderByCreatedAtDesc(Long userId);
         Optional<Booking> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);

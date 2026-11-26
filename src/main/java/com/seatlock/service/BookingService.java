@@ -7,6 +7,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -19,6 +20,7 @@ public class BookingService {
     }
 
     public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds) {}
+    public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds) {}
 
     private final BookingRepository bookings;
     private final SeatRepository seats;
@@ -62,9 +64,30 @@ public class BookingService {
 
         Booking booking = bookings.save(new Booking(user, event, event.getPriceCents() * selected.size(), idempotencyKey));
         selected.forEach(s -> s.book(booking));
+        booking.recordSeatLabels();
         seats.saveAllAndFlush(selected); // version check fires here, inside the transaction
         // Delivered only after commit (see BookingEvents): evict cache, release holds, publish to RabbitMQ.
         publisher.publishEvent(new BookingCommitted(booking.getId(), userId, eventId, seatIds));
+        return BookingDto.of(booking);
+    }
+
+    /**
+     * Cancels the caller's own booking before the event starts and puts its seats back on sale.
+     * Idempotent: cancelling twice returns the already-cancelled booking. After commit, the freed
+     * seats go to RabbitMQ so the waitlist gets first claim (see BookingEvents / WaitlistConsumer).
+     */
+    @Transactional
+    public BookingDto cancel(Long userId, Long bookingId) {
+        // Someone else's booking id looks exactly like a missing one: no probing other users' bookings.
+        Booking booking = bookings.findById(bookingId).filter(b -> b.getUser().getId().equals(userId))
+                .orElseThrow(() -> new NoSuchElementException("Booking not found"));
+        if (booking.isCancelled()) return BookingDto.of(booking);
+        if (!booking.getEvent().getStartsAt().isAfter(Instant.now()))
+            throw new IllegalArgumentException("This event has already started and can't be cancelled");
+
+        List<Seat> freed = booking.cancel();
+        seats.saveAllAndFlush(freed);
+        publisher.publishEvent(new BookingCancelled(booking.getId(), booking.getEvent().getId(), freed.stream().map(Seat::getId).toList()));
         return BookingDto.of(booking);
     }
 

@@ -3,6 +3,7 @@ package com.seatlock.service;
 import com.seatlock.api.Dtos.HoldResponse;
 import com.seatlock.domain.Repositories.SeatRepository;
 import com.seatlock.domain.Seat;
+import com.seatlock.realtime.SeatUpdates;
 import com.seatlock.service.BookingService.SeatUnavailableException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Checkout holds in Redis: SET hold:seat:{id} {userId} NX EX 300.
@@ -28,10 +30,12 @@ public class SeatHoldService {
 
     private final StringRedisTemplate redis;
     private final SeatRepository seats;
+    private final SeatUpdates updates;
 
-    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats) {
+    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats, SeatUpdates updates) {
         this.redis = redis;
         this.seats = seats;
+        this.updates = updates;
     }
 
     static String key(Long seatId) { return "hold:seat:" + seatId; }
@@ -65,11 +69,29 @@ public class SeatHoldService {
             }
             acquired.add(id);
         }
+        updates.publish(eventId);
         return new HoldResponse(acquired, Instant.now().plus(TTL));
     }
 
     public void release(Long userId, Long seatId) {
         redis.execute(RELEASE_IF_OWNER, List.of(key(seatId)), userId.toString());
+    }
+
+    /** A customer letting go of a seat: release it and tell everyone watching that event. */
+    public void releaseAndNotify(Long userId, Long seatId) {
+        release(userId, seatId);
+        seats.findById(seatId).ifPresent(s -> updates.publish(s.getEvent().getId()));
+    }
+
+    /** seatId -> when its hold expires, for the given seats that have a live hold. */
+    public Map<Long, Instant> expiries(List<Long> seatIds) {
+        Map<Long, Instant> out = new HashMap<>();
+        Instant now = Instant.now();
+        for (Long id : seatIds) {
+            Long ms = redis.getExpire(key(id), TimeUnit.MILLISECONDS);
+            if (ms != null && ms > 0) out.put(id, now.plusMillis(ms));
+        }
+        return out;
     }
 
     /** seatId -> userId holding it, for seats with a live hold. */

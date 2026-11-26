@@ -38,6 +38,14 @@ public class Seat {
         booking.getSeats().add(this);
     }
 
+    /** Back on sale; @Version still guards against a concurrent booking of the same row. */
+    public void release() {
+        this.status = Status.AVAILABLE;
+        this.booking = null;
+    }
+
+    public String label() { return rowLabel + seatNumber; }
+
     public Long getId() { return id; }
     public Event getEvent() { return event; }
     public String getRowLabel() { return rowLabel; }

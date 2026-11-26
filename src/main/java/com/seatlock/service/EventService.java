@@ -11,6 +11,7 @@ import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -54,11 +55,14 @@ public class EventService {
         if (!events.existsById(eventId)) throw new NoSuchElementException("Event not found");
         List<Seat> list = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId);
         Map<Long, Long> held = holds.holders(list.stream().map(Seat::getId).toList());
+        List<Long> mine = held.entrySet().stream().filter(h -> h.getValue().equals(viewerId)).map(Map.Entry::getKey).toList();
+        Map<Long, Instant> expiries = holds.expiries(mine); // at most 10 seats per viewer
         return list.stream().map(s -> {
             Long holder = held.get(s.getId());
             boolean booked = s.getStatus() == Seat.Status.BOOKED;
             String status = booked ? "BOOKED" : holder != null ? "HELD" : "AVAILABLE";
-            return new SeatDto(s.getId(), s.getRowLabel(), s.getSeatNumber(), status, !booked && holder != null && holder.equals(viewerId));
+            boolean isMine = !booked && holder != null && holder.equals(viewerId);
+            return new SeatDto(s.getId(), s.getRowLabel(), s.getSeatNumber(), status, isMine, isMine ? expiries.get(s.getId()) : null);
         }).toList();
     }
 

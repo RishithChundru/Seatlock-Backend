@@ -1,6 +1,7 @@
 package com.seatlock.api;
 
 import com.seatlock.service.BookingService.SeatUnavailableException;
+import com.seatlock.service.WaitlistService;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -27,6 +28,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(org.springframework.data.redis.RedisConnectionFailureException.class)
     ProblemDetail redisDown() {
         return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "Seat holds are temporarily unavailable, please retry");
+    }
+
+    @ExceptionHandler(WaitlistService.SeatsStillAvailableException.class)
+    ProblemDetail seatsAvailable(RuntimeException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
