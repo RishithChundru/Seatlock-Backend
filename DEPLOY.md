@@ -119,11 +119,39 @@ git push
 - Backend: Actions runs the tests, and Render deploys if they pass (watch the **Actions** tab).
 - Frontend: Vercel deploys, and Actions lints and builds.
 
+## Email (optional)
+
+Without SMTP settings, emails just fail quietly and are logged; bookings and tickets still work. To send real email with [Resend](https://resend.com) (free tier):
+
+1. Sign up, verify a domain you own (or use Resend's test sender while trying it), and create an **API key**.
+2. Render → `seatlock-api` → **Environment**, add:
+
+   | Key | Value |
+   |---|---|
+   | `SMTP_HOST` | `smtp.resend.com` |
+   | `SMTP_PORT` | `587` |
+   | `SMTP_USER` | `resend` |
+   | `SMTP_PASSWORD` | your Resend API key |
+   | `SMTP_AUTH` / `SMTP_STARTTLS` | `true` / `true` |
+   | `MAIL_FROM` | `Seatlock <tickets@yourdomain.com>` |
+   | `FRONTEND_URL` | your Vercel URL (links in emails point here) |
+
+Any other SMTP provider works the same way.
+
+## Keeping the free Render service awake
+
+Render's free web services **spin down after 15 minutes without traffic**, and the next visitor waits ~30–60 s. Your options:
+
+1. **Upgrade the service to a paid instance** (Render → service → **Settings → Instance type**, Starter or above). Always on, no tricks. This is the reliable fix.
+2. **Ping it every 10 minutes** with a free uptime monitor, for example [UptimeRobot](https://uptimerobot.com): New monitor → HTTP(s) → URL `https://<your-api>.onrender.com/actuator/health` → interval 5–10 min. Traffic keeps it awake, and you also get downtime alerts. Caveat: free instances get **750 hours per month per workspace**. One always-on service uses ~720–744 hours, so this only works if it's your *only* free web service. Also check Render's current free-tier terms.
+
+Neon (database) sleeping is fine: it resumes in about a second on the next query.
+
 ## Good to know (free tiers)
 
-- **Render free** services sleep after ~15 minutes idle; the next request wakes them in ~30–60 s. Before showing it to a recruiter, open the site a minute early, or upgrade to a paid instance.
+- **Render free** services sleep after ~15 minutes idle (see above).
 - **Neon** suspends compute when idle and resumes on the next query (a second or two).
 - **CloudAMQP Little Lemur** and **Upstash free** have message/command limits, far above what a demo uses.
 - The schema is managed by Hibernate (`ddl-auto=update`). Before real users rely on the data, switch to Flyway migrations.
 - If a secret leaks (JWT secret, DB password, deploy hook), rotate it in the provider and update it in Render or GitHub. Rotating `JWT_SECRET` signs everyone out.
-- The admin password is only applied when the database is **first** seeded. To change it later, re-create the database or add a change-password feature.
+- The admin password is only applied when the database is **first** seeded. Change it any time from the **Account** page.

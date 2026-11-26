@@ -84,6 +84,7 @@ On the first start with an empty database, the app creates the tables, four samp
 | http://localhost:8080/actuator/health | should return `{"status":"UP"}` |
 | http://localhost:8080/api/events | sample events (JSON) |
 | http://localhost:15672 | RabbitMQ management UI (local default login `guest` / `guest`) |
+| http://localhost:8025 | Mailpit inbox: every email the app sends locally lands here |
 
 ### 5. Run the frontend
 
@@ -115,6 +116,9 @@ All settings are environment variables. Locally they come from `.env`; in produc
 | `ADMIN_EMAIL` | ✅ | `admin@seatlock.local` | Admin account created on first start |
 | `ADMIN_PASSWORD` | ✅ | *(generated, printed in log)* | 8+ characters |
 | `CORS_ORIGINS` | ✅ | `http://localhost:3000` | Frontend URLs allowed to call the API, comma-separated |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_AUTH`, `SMTP_STARTTLS` | optional | Mailpit on `localhost:1025` | Outgoing email; see [DEPLOY.md](DEPLOY.md#email-optional) |
+| `MAIL_FROM` | optional | `Seatlock <tickets@seatlock.local>` | Sender address |
+| `FRONTEND_URL` | ✅ for email links | `http://localhost:3000` | Where links in emails point |
 | `DB_POOL_SIZE` | optional | `10` | Max DB connections per instance (hot reads use Redis, so this backs writes) |
 | `PORT` | set by host | `8080` | HTTP port |
 
@@ -186,6 +190,14 @@ docker run --rm -i -v "$PWD/load:/scripts" \
   grafana/k6 run /scripts/seatlock.js
 ```
 
+### Seat tiers, search, check-in, email
+
+- **Tiers:** events can have VIP and Premium front rows (default prices 2× and 1.5× the standard price, or set your own). Each seat stores its tier, and the event stores the prices. Booking totals are summed per seat, and seat maps show tier and price, served from the same Redis cache as the rest of the map.
+- **Search:** `GET /api/events/search` filters upcoming events by text, category, city (parsed from "Place, City"), date window and max price, with pagination and the available cities and categories for the filter UI. It runs in memory over the cached event list. That's fine for hundreds of events, and the code notes when to move it to SQL.
+- **Gate check-in:** tickets carry a QR of their code. `POST /api/admin/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
+- **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
+- **Admin:** delete events (refused while confirmed bookings exist), remove covers. **Account:** change password (needs the current one).
+
 ### Event cover images
 
 Admins upload covers as multipart. The server **sniffs magic bytes** and accepts only real JPEG, PNG or WebP, ignoring the client's `Content-Type`, so an SVG or HTML file renamed to `.png` is rejected (no stored XSS through uploads). Files are capped at 2 MB (413 above that). Bytes live in their own `event_images` table, so listing events never loads image data. `imageUrl` is versioned (`?v=<updated-at>`), so it's served `Cache-Control: immutable, max-age=1y`.
@@ -213,6 +225,8 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 
 [`SeatStreamTest`](src/test/java/com/seatlock/SeatStreamTest.java) opens a real SSE connection and checks a hold made elsewhere is pushed to it through Redis pub/sub. [`ImageSniffTest`](src/test/java/com/seatlock/service/ImageSniffTest.java) checks that only real image files pass the upload check.
 
+[`Tier2FeaturesTest`](src/test/java/com/seatlock/Tier2FeaturesTest.java): tier pricing and per-seat totals; search with every filter plus pagination; **20 concurrent check-ins of one ticket → exactly one admission**; check-in refused for other events and cancelled bookings; delete refused while bookings exist; and a real ticket email arriving in a Mailpit container's inbox. Every test class creates its own events, because classes share one database and CI runs them in arbitrary order (a real CI failure that came from that).
+
 ---
 
 ## API
@@ -220,7 +234,11 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | Method | Path | Auth |
 |---|---|---|
 | POST | `/api/auth/register`, `/api/auth/login` | public |
-| GET | `/api/events`, `/api/events/{id}` (cached) | public |
+| GET | `/api/events`, `/api/events/{id}` (cached; include `city` and `tiers`) | public |
+| GET | `/api/events/search?q&category&city&from&to&maxPrice&page&size` | public |
+| DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
+| POST | `/api/admin/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` | ADMIN |
+| GET | `/api/account/me`; POST `/api/account/password` `{currentPassword, newPassword}` | USER |
 | GET | `/api/events/{id}/seats` (`HELD` / `mine` reflect live holds) | public |
 | POST | `/api/events` | ADMIN |
 | POST | `/api/events/{id}/image` (multipart `file`, JPEG/PNG/WebP ≤ 2 MB) | ADMIN |
@@ -276,4 +294,4 @@ Neon (Postgres) + Upstash (Redis) + CloudAMQP (RabbitMQ) + Render (API, Docker) 
 - Push hold expiries too (Redis keyspace notifications), instead of the 30 s backup refetch
 - Rate limiting on login and holds (Redis token bucket)
 - Flyway migrations, Swagger UI
-- Real email delivery, QR codes on tickets, remove cover image
+- Revoke existing logins on password change (token version claim)
