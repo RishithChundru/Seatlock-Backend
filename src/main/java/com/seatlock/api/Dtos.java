@@ -15,8 +15,9 @@ public final class Dtos {
     }
 
     // Serializable: cached in Redis
-    public record EventDto(Long id, String title, String venue, String category, Instant startsAt,
-                           int priceCents, long totalSeats, long availableSeats) implements Serializable {}
+    /** imageUrl is versioned (?v=) so browsers can cache it forever; null when no cover was uploaded. */
+    public record EventDto(Long id, String title, String venue, String category, Instant startsAt, int priceCents,
+                           long totalSeats, long availableSeats, String description, String imageUrl) implements Serializable {}
 
     /** status: AVAILABLE, BOOKED, or HELD (in someone's 5-minute checkout hold). mine = held by the caller. */
     public record SeatDto(Long id, String row, int number, String status, boolean mine) {}
@@ -41,7 +42,8 @@ public final class Dtos {
 
     public record CreateEventRequest(@NotBlank String title, @NotBlank String venue, @NotBlank String category,
                                      @NotNull @Future Instant startsAt, @Min(0) int priceCents,
-                                     @Min(1) @Max(26) int rows, @Min(1) @Max(40) int seatsPerRow) {}
+                                     @Min(1) @Max(26) int rows, @Min(1) @Max(40) int seatsPerRow,
+                                     @Size(max = 1000) String description) {}
 
     public record RegisterRequest(@NotBlank @Email String email, @NotBlank @Size(max = 60) String name,
                                   @NotBlank @Size(min = 8, max = 72) String password) {}

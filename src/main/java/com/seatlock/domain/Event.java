@@ -18,16 +18,24 @@ public class Event {
     private Instant startsAt;
     @Column(nullable = false)
     private int priceCents;
+    @Column(length = 1000)
+    private String description;
+    private Instant imageUpdatedAt;
 
     protected Event() {}
 
-    public Event(String title, String venue, String category, Instant startsAt, int priceCents) {
+    public Event(String title, String venue, String category, Instant startsAt, int priceCents, String description) {
         this.title = title;
         this.venue = venue;
         this.category = category;
         this.startsAt = startsAt;
         this.priceCents = priceCents;
+        this.description = description;
     }
+
+    public String getDescription() { return description; }
+    public Instant getImageUpdatedAt() { return imageUpdatedAt; }
+    public void imageChanged() { this.imageUpdatedAt = Instant.now(); }
 
     public Long getId() { return id; }
     public String getTitle() { return title; }

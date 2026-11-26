@@ -34,6 +34,10 @@ After the booking transaction **commits** (`@TransactionalEventListener`), the s
 - **Idempotent consumer:** a redelivered message for an already-ticketed booking is a no-op.
 - **No lost messages:** if RabbitMQ is down at commit time, a scheduled sweeper re-publishes bookings that still have no ticket after 1 minute.
 
+## Event cover images
+
+Admins upload covers as multipart. The server **sniffs magic bytes** and accepts only real JPEG, PNG or WebP, ignoring the client's `Content-Type`, so an SVG or HTML file renamed to `.png` is rejected (no stored-XSS through uploads). Files are capped at 2 MB (413 above that). Bytes live in their own `event_images` table, so listing events never loads image data. `imageUrl` carries a version (`?v=<updated-at>`), so responses are served `Cache-Control: immutable, max-age=1y` and a new upload changes the URL.
+
 ## Tests (real infrastructure)
 
 [`BookingConcurrencyTest`](src/test/java/com/seatlock/BookingConcurrencyTest.java) runs against real Postgres, Redis and RabbitMQ containers (Testcontainers):
@@ -74,6 +78,8 @@ Config via env vars: `DB_URL`, `DB_USER`, `DB_PASSWORD`, `REDIS_HOST`, `REDIS_PO
 | GET | `/api/events`, `/api/events/{id}` (cached) | public |
 | GET | `/api/events/{id}/seats` (`HELD` / `mine` reflect live holds) | public |
 | POST | `/api/events` | ADMIN |
+| POST | `/api/events/{id}/image` (multipart `file`, JPEG/PNG/WebP ≤ 2 MB) | ADMIN |
+| GET | `/api/events/{id}/image?v=…` (immutable, cached 1 year) | public |
 | POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min | USER |
 | DELETE | `/api/holds/{seatId}` | USER |
 | POST | `/api/bookings` (`Idempotency-Key` header optional) | USER |

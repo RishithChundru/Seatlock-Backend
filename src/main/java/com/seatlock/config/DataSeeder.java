@@ -43,10 +43,14 @@ class DataSeeder implements CommandLineRunner {
 
         Instant day = Instant.now().truncatedTo(ChronoUnit.DAYS).plus(Duration.ofHours(14)); // 19:30 IST
         List<EventDto> created = List.of(
-                events.create(new CreateEventRequest("Neon Nights: Synthwave Live", "Skyline Arena, Hyderabad", "Concert", day.plus(Duration.ofDays(6)), 149900, 10, 16)),
-                events.create(new CreateEventRequest("Late Night Laughs", "The Comedy Cellar, Bengaluru", "Comedy", day.plus(Duration.ofDays(9)), 79900, 8, 12)),
-                events.create(new CreateEventRequest("Monsoon Stories: Film Premiere", "Lumière Screens, Mumbai", "Movie", day.plus(Duration.ofDays(13)), 39900, 9, 14)),
-                events.create(new CreateEventRequest("SystemConf 2026: Scaling Talks", "Hitex Hall 3, Hyderabad", "Tech", day.plus(Duration.ofDays(20)), 199900, 8, 14)));
+                events.create(new CreateEventRequest("Neon Nights: Synthwave Live", "Skyline Arena, Hyderabad", "Concert", day.plus(Duration.ofDays(6)), 149900, 10, 16,
+                        "Two hours of analog synths, live drums and a light show built for the arena. Doors open 90 minutes before the set.")),
+                events.create(new CreateEventRequest("Late Night Laughs", "The Comedy Cellar, Bengaluru", "Comedy", day.plus(Duration.ofDays(9)), 79900, 8, 12,
+                        "Five comics, one mic, no safe topics. A late-night stand-up showcase in an intimate 96-seat room. 18+.")),
+                events.create(new CreateEventRequest("Monsoon Stories: Film Premiere", "Lumière Screens, Mumbai", "Movie", day.plus(Duration.ofDays(13)), 39900, 9, 14,
+                        "Opening-night premiere of an independent drama, followed by a Q&A with the director and cast.")),
+                events.create(new CreateEventRequest("SystemConf 2026: Scaling Talks", "Hitex Hall 3, Hyderabad", "Tech", day.plus(Duration.ofDays(20)), 199900, 8, 14,
+                        "A one-day conference on distributed systems: queues, caches, consistency and the war stories behind them.")));
 
         // Pre-book a scattered handful so the seat maps look lived-in.
         for (EventDto e : created) {

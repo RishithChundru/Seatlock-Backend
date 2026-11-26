@@ -7,7 +7,13 @@ import com.seatlock.service.BookingService;
 import com.seatlock.service.EventService;
 import com.seatlock.service.SeatHoldService;
 import jakarta.validation.Valid;
+import com.seatlock.domain.EventImage;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
+import java.io.IOException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
@@ -83,6 +89,20 @@ final class Controllers {
         @PostMapping
         @ResponseStatus(HttpStatus.CREATED)
         EventDto create(@Valid @RequestBody CreateEventRequest r) { return events.create(r); }
+
+        @PostMapping(value = "/{id}/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+        EventDto uploadImage(@PathVariable Long id, @RequestParam("file") MultipartFile file) throws IOException {
+            return events.setImage(id, file.getBytes());
+        }
+
+        @GetMapping("/{id}/image")
+        ResponseEntity<byte[]> image(@PathVariable Long id) {
+            EventImage img = events.image(id);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(img.getContentType()))
+                    .cacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable()) // URL is versioned
+                    .body(img.getData());
+        }
     }
 
     @RestController
