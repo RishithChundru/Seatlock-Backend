@@ -1,0 +1,64 @@
+{
+  "title": "Seatlock",
+  "uid": "seatlock",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "tags": ["seatlock"],
+  "panels": [
+    {
+      "type": "timeseries", "title": "Bookings per minute (confirmed vs lost a race)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (outcome) (rate(seatlock_bookings_total[1m]) * 60)", "legendFormat": "{{outcome}}" }]
+    },
+    {
+      "type": "timeseries", "title": "Seat holds per minute",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (outcome) (rate(seatlock_holds_total[1m]) * 60)", "legendFormat": "{{outcome}}" }]
+    },
+    {
+      "type": "timeseries", "title": "p95 latency by endpoint",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, method, uri) (rate(http_server_requests_seconds_bucket{uri=~\"/api/.*\"}[1m])))", "legendFormat": "{{method}} {{uri}}" }]
+    },
+    {
+      "type": "timeseries", "title": "Requests per second by status",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (status) (rate(http_server_requests_seconds_count{uri=~\"/api/.*\"}[1m]))", "legendFormat": "{{status}}" }]
+    },
+    {
+      "type": "timeseries", "title": "DB connection pool (the k6 bottleneck)",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(hikaricp_connections_active)", "legendFormat": "active" },
+        { "expr": "sum(hikaricp_connections_pending)", "legendFormat": "waiting for a connection" },
+        { "expr": "sum(hikaricp_connections_max)", "legendFormat": "max" }
+      ]
+    },
+    {
+      "type": "stat", "title": "Live seat-map viewers (SSE)",
+      "gridPos": { "x": 12, "y": 16, "w": 4, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(seatlock_sse_subscribers)" }]
+    },
+    {
+      "type": "stat", "title": "Check-ins (last hour)",
+      "gridPos": { "x": 16, "y": 16, "w": 4, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (result) (increase(seatlock_checkins_total[1h]))", "legendFormat": "{{result}}" }]
+    },
+    {
+      "type": "stat", "title": "Waitlist offers (last hour)",
+      "gridPos": { "x": 20, "y": 16, "w": 4, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(increase(seatlock_waitlist_offers_total[1h]))" }]
+    }
+  ]
+}

@@ -19,9 +19,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
+import org.springframework.beans.factory.annotation.Value;
 
 @Service
 public class EventService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EventService.class);
     public static final String LIST_CACHE = "events";
     public static final String ITEM_CACHE = "event";
 
@@ -34,9 +37,14 @@ public class EventService {
     private final SeatRows seatRows;
     private final BookingRepository bookings;
     private final WaitlistRepository waitlist;
+    private final S3ImageStore objectStore; // isEnabled() only when S3_BUCKET is configured
+    private final String objectPublicUrl;
 
     public EventService(EventRepository events, SeatRepository seats, SeatHoldService holds, EventImageRepository images,
-                        SeatRows seatRows, BookingRepository bookings, WaitlistRepository waitlist) {
+                        SeatRows seatRows, BookingRepository bookings, WaitlistRepository waitlist,
+                        S3ImageStore objectStore, @Value("${app.images.s3.public-url}") String objectPublicUrl) {
+        this.objectStore = objectStore;
+        this.objectPublicUrl = objectPublicUrl.replaceAll("/+$", "");
         this.events = events;
         this.seats = seats;
         this.holds = holds;
@@ -73,15 +81,35 @@ public class EventService {
         }).toList();
     }
 
+    /**
+     * Not @Transactional on purpose: with object storage the upload is network I/O, and holding a pooled DB
+     * connection across it is how the k6 run starved the pool. Upload first, then short repository writes.
+     */
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId")})
-    @Transactional
     public EventDto setImage(Long eventId, byte[] data) {
         Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
         if (data.length == 0 || data.length > MAX_IMAGE_BYTES) throw new IllegalArgumentException("Image must be under 2 MB");
         String type = sniffImageType(data);
         if (type == null) throw new IllegalArgumentException("Only JPEG, PNG or WebP images are allowed");
-        images.save(new EventImage(eventId, type, data));
+        String oldKey = e.getImageKey();
+        String newKey = null;
+        if (objectStore.isEnabled()) {
+            try {
+                newKey = objectStore.put(eventId, type, data); // new key per upload: old URLs stay cacheable
+            } catch (RuntimeException ex) { // storage down or paused: keep uploads working via Postgres
+                log.warn("Object storage upload failed for event {}, storing the cover in Postgres: {}", eventId, ex.getMessage());
+            }
+        }
+        if (newKey != null) {
+            e.setImageKey(newKey);
+            if (images.existsById(eventId)) images.deleteById(eventId); // moved out of Postgres
+        } else {
+            images.save(new EventImage(eventId, type, data));
+            e.setImageKey(null);
+        }
         e.imageChanged();
+        events.save(e);
+        if (oldKey != null && !oldKey.equals(e.getImageKey())) objectStore.delete(oldKey);
         return toDto(e);
     }
 
@@ -124,8 +152,10 @@ public class EventService {
     @Transactional
     public EventDto removeImage(Long eventId) {
         Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        String key = e.getImageKey();
         if (images.existsById(eventId)) images.deleteById(eventId);
         e.imageRemoved();
+        objectStore.delete(key); // after the DB change; a leftover object is harmless
         return toDto(e);
     }
 
@@ -141,7 +171,9 @@ public class EventService {
         seats.deleteByEventId(eventId);
         bookings.deleteByEventId(eventId); // only cancelled ones are left
         if (images.existsById(eventId)) images.deleteById(eventId);
+        String key = e.getImageKey();
         events.delete(e);
+        objectStore.delete(key);
     }
 
     public static class EventHasBookingsException extends RuntimeException {
@@ -149,7 +181,9 @@ public class EventService {
     }
 
     private EventDto toDto(Event e) {
-        String imageUrl = e.getImageUpdatedAt() == null ? null
+        // Object storage: absolute public/CDN URL (the key is unique per upload). Postgres: versioned API URL.
+        String imageUrl = e.getImageKey() != null ? objectPublicUrl + "/" + e.getImageKey()
+                : e.getImageUpdatedAt() == null ? null
                 : "/api/events/" + e.getId() + "/image?v=" + e.getImageUpdatedAt().toEpochMilli();
         List<TierPrice> tiers = new ArrayList<>();
         if (e.getVipPriceCents() != null) tiers.add(new TierPrice("VIP", e.getVipPriceCents()));

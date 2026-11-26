@@ -37,7 +37,12 @@ public class SeatUpdates implements MessageListener {
     private final StringRedisTemplate redis;
     private final Map<Long, Set<SseEmitter>> subscribers = new ConcurrentHashMap<>();
 
-    public SeatUpdates(StringRedisTemplate redis) { this.redis = redis; }
+    public SeatUpdates(StringRedisTemplate redis, io.micrometer.core.instrument.MeterRegistry registry) {
+        this.redis = redis;
+        // Open live seat-map streams on this instance.
+        io.micrometer.core.instrument.Gauge.builder("seatlock.sse.subscribers", subscribers,
+                m -> m.values().stream().mapToInt(java.util.Set::size).sum()).register(registry);
+    }
 
     /** Call after a seat change is committed. Never throws: live updates are best-effort, clients also poll. */
     public void publish(Long eventId) {

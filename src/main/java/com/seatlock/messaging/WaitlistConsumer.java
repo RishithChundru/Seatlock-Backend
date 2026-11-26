@@ -16,8 +16,10 @@ class WaitlistConsumer {
     private final WaitlistService waitlist;
     private final SeatUpdates updates;
     private final Mailer mailer;
+    private final com.seatlock.config.SeatlockMetrics metrics;
 
-    WaitlistConsumer(WaitlistService waitlist, SeatUpdates updates, Mailer mailer) {
+    WaitlistConsumer(WaitlistService waitlist, SeatUpdates updates, Mailer mailer, com.seatlock.config.SeatlockMetrics metrics) {
+        this.metrics = metrics;
         this.waitlist = waitlist;
         this.updates = updates;
         this.mailer = mailer;
@@ -26,6 +28,7 @@ class WaitlistConsumer {
     @RabbitListener(queues = RabbitConfig.SEATS_RELEASED)
     public void handle(SeatsReleased msg) {
         var offers = waitlist.offer(msg.eventId(), msg.seatIds());
+        metrics.waitlistOffers(offers.size());
         updates.publish(msg.eventId());
         offers.forEach(o -> mailer.waitlistOffer(o.email(), o.eventTitle(), o.eventId(), o.seat(), o.expiresAt()));
     }

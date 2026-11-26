@@ -29,6 +29,7 @@ class TestcontainersConfig {
             registry.add("spring.mail.host", mailpit::getHost);
             registry.add("spring.mail.port", () -> mailpit.getMappedPort(1025));
             registry.add("test.mailpit.api", () -> "http://" + mailpit.getHost() + ":" + mailpit.getMappedPort(8025));
+            registry.add("app.metrics.token", () -> "test-metrics-token");
         };
     }
 }

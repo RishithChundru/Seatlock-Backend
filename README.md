@@ -18,7 +18,7 @@ Frontend (Next.js): [Seatlock-Frontend](https://github.com/RishithChundru/Seatlo
                                   │ events::*, seatRows::*                 │  read caches (no DB on hot reads)
                                   │ seatlock:seat-updates (pub/sub)        │  live-update fan-out
                                   └───────────────▲────────────────────────┘
-Next.js ──REST + JWT──▶ Spring Boot ──────────────┤
+Next.js ─/api proxy─▶ Spring Boot ──────────────┤
   ◀──── SSE stream ────       │                   ▼
  live seat map                │             PostgreSQL  (@Version optimistic lock = final guarantee)
  Idempotency-Key              │ after commit
@@ -120,6 +120,10 @@ All settings are environment variables. Locally they come from `.env`; in produc
 | `MAIL_FROM` | optional | `Seatlock <tickets@seatlock.local>` | Sender address |
 | `FRONTEND_URL` | ✅ for email links | `http://localhost:3000` | Where links in emails point |
 | `DB_POOL_SIZE` | optional | `10` | Max DB connections per instance (hot reads use Redis, so this backs writes) |
+| `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | optional | `15m` / `14d` | Session lifetimes |
+| `COOKIE_SECURE` | ✅ `true` | `false` | Auth cookies only over HTTPS |
+| `METRICS_TOKEN` | optional | *(empty = closed)* | Password for `/actuator/prometheus` (user `prometheus`) |
+| `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_URL`, `S3_REGION` | optional | *(empty = covers in Postgres)* | Store covers in Cloudflare R2 / S3; see [DEPLOY.md](DEPLOY.md#cover-images-on-cloudflare-r2-optional) |
 | `PORT` | set by host | `8080` | HTTP port |
 
 The admin account is only created on an **empty** database. Changing `ADMIN_EMAIL` or `ADMIN_PASSWORD` later doesn't change an existing account.
@@ -198,9 +202,24 @@ docker run --rm -i -v "$PWD/load:/scripts" \
 - **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
 - **Admin:** delete events (refused while confirmed bookings exist), remove covers. **Account:** change password (needs the current one).
 
+### Sessions: both tokens in httpOnly cookies
+
+Login sets two cookies, both `HttpOnly`, `SameSite=Lax`, and `Secure` in production: `sl_access` (15-minute JWT) and `sl_refresh` (14-day opaque token). The browser app never sees a token, so an XSS bug can't steal a session. The frontend calls the API through its own `/api` proxy, so the cookies are first-party.
+
+- **Rotation with reuse detection.** Every refresh swaps the refresh token for a new one; only SHA-256 hashes are stored. A rotated token showing up again means it was copied, so the whole login (token family) is revoked. A 30 s grace window covers two tabs refreshing at once.
+- **CSRF.** SameSite=Lax stops cross-site POSTs from carrying the cookies, and every cookie-authenticated write must also send `X-Requested-With` (403 otherwise), a header other sites can't add without passing CORS.
+- **Password change** signs out every other device. **Logout** revokes the family and clears both cookies.
+- API clients (Swagger, k6, scripts) can still send `Authorization: Bearer <token>` from the login response body; the header wins over cookies.
+
+### Migrations, API docs, metrics
+
+- **Flyway** owns the schema (`src/main/resources/db/migration`); Hibernate only validates it. An existing database is baselined at V1 on first start.
+- **Swagger UI** at `/swagger-ui.html` (OpenAPI JSON at `/v3/api-docs`).
+- **Prometheus** metrics at `/actuator/prometheus` (HTTP Basic, user `prometheus`, password `METRICS_TOKEN`): booking outcomes, hold conflicts, cancellations, waitlist offers, check-ins, SSE subscribers, plus HTTP latency percentiles and Hikari pool usage. `docker compose --profile observability up -d` starts Prometheus (:9090) and a provisioned Grafana dashboard (:3001), scraping an API on :8080 started with `METRICS_TOKEN=local-dev-metrics`.
+
 ### Event cover images
 
-Admins upload covers as multipart. The server **sniffs magic bytes** and accepts only real JPEG, PNG or WebP, ignoring the client's `Content-Type`, so an SVG or HTML file renamed to `.png` is rejected (no stored XSS through uploads). Files are capped at 2 MB (413 above that). Bytes live in their own `event_images` table, so listing events never loads image data. `imageUrl` is versioned (`?v=<updated-at>`), so it's served `Cache-Control: immutable, max-age=1y`.
+Admins upload covers as multipart. The server **sniffs magic bytes** and accepts only real JPEG, PNG or WebP, ignoring the client's `Content-Type`, so an SVG or HTML file renamed to `.png` is rejected (no stored XSS through uploads). Files are capped at 2 MB (413 above that). Bytes live in their own `event_images` table, so listing events never loads image data. `imageUrl` is versioned (`?v=<updated-at>`), so it's served `Cache-Control: immutable, max-age=1y`. Set the `S3_*` variables and covers go to object storage instead (Cloudflare R2 or AWS S3; `docker compose --profile storage up -d` runs S3Mock locally). `imageUrl` then points at the bucket's public URL, so image traffic never touches the API or the database. Uploads happen outside any DB transaction, and replaced or removed covers are deleted from the bucket. If the bucket is unreachable, the upload falls back to Postgres instead of failing.
 
 ### Tests (real infrastructure)
 
@@ -252,7 +271,7 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET / POST / DELETE | `/api/events/{id}/waitlist` (your status / join a sold-out event / leave) | USER |
 | GET | `/api/waitlist/me` (your waitlists, with any seat offered to you) | USER |
 
-Authenticated calls send `Authorization: Bearer <token>` from the login/register response. Errors are RFC 7807 `ProblemDetail` JSON.
+The browser app authenticates with the httpOnly cookies (see Sessions); `POST /api/auth/refresh`, `GET /api/auth/session` and `POST /api/auth/logout` work from them. Other clients send `Authorization: Bearer <token>` from the login/register response. Full reference: `/swagger-ui.html`. Errors are RFC 7807 `ProblemDetail` JSON.
 
 ## Project structure
 
@@ -293,5 +312,4 @@ Neon (Postgres) + Upstash (Redis) + CloudAMQP (RabbitMQ) + Render (API, Docker) 
 
 - Push hold expiries too (Redis keyspace notifications), instead of the 30 s backup refetch
 - Rate limiting on login and holds (Redis token bucket)
-- Flyway migrations, Swagger UI
-- Revoke existing logins on password change (token version claim)
+- Revoke the short-lived access token at logout too (today it lapses within 15 minutes)

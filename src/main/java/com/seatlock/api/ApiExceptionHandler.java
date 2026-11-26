@@ -19,9 +19,13 @@ import java.util.NoSuchElementException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
+    private final com.seatlock.config.SeatlockMetrics metrics;
+
+    public ApiExceptionHandler(com.seatlock.config.SeatlockMetrics metrics) { this.metrics = metrics; }
 
     @ExceptionHandler({SeatUnavailableException.class, ObjectOptimisticLockingFailureException.class})
-    ProblemDetail seatTaken() {
+    ProblemDetail seatTaken(jakarta.servlet.http.HttpServletRequest request) {
+        if (request.getRequestURI().startsWith("/api/holds")) metrics.holdConflict(); else metrics.bookingConflict();
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, new SeatUnavailableException().getMessage());
     }
 

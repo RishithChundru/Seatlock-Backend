@@ -28,6 +28,12 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      # Auth cookies only over HTTPS
+      - key: COOKIE_SECURE
+        value: "true"
+      # Prometheus scrape password (user "prometheus"); /actuator/prometheus is closed without it
+      - key: METRICS_TOKEN
+        generateValue: true
       # Links in emails (your Vercel URL)
       - key: FRONTEND_URL
         sync: false
