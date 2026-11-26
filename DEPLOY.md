@@ -19,31 +19,33 @@ Keep a scratch note open while you go: you'll collect 6 values (DB URL, DB user,
 ## 1. PostgreSQL on Neon
 
 1. **New Project** → name `seatlock`, region **AWS Asia Pacific (Singapore)**, Postgres 17.
-2. On the project dashboard, open **Connect**. Turn **Connection pooling off** (Spring already pools connections) and copy the connection string. It looks like:
-   `postgresql://neondb_owner:AbC123@ep-cool-name-123456.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`
+2. On the project dashboard, open **Connect**. Turn **Connection pooling off** (Spring already pools connections) and copy the connection string. It has this shape:
+   `postgresql://<USER>:<PASSWORD>@<HOST>/<DATABASE>?sslmode=require&channel_binding=require`
 3. Split it into the three values Spring needs:
 
    | Variable | Value |
    |---|---|
-   | `DB_URL` | `jdbc:postgresql://ep-cool-name-123456.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` |
-   | `DB_USER` | `neondb_owner` |
-   | `DB_PASSWORD` | `AbC123` |
+   | `DB_URL` | `jdbc:postgresql://<HOST>/<DATABASE>?sslmode=require` |
+   | `DB_USER` | `<USER>` (usually `neondb_owner`) |
+   | `DB_PASSWORD` | `<PASSWORD>` |
 
-   (Add `jdbc:` in front, and remove `user:password@` from the middle.)
+   Add `jdbc:` in front, take `<USER>:<PASSWORD>@` out of the middle, and drop `&channel_binding=require`.
+
+> Paste these values only into Render. Never into a file in the repo, an issue, or a chat. If one leaks, reset it in Neon (**Roles → Reset password**) and update Render.
 
 Tables are created automatically on first start.
 
 ## 2. Redis on Upstash
 
 1. **Create Database** → name `seatlock`, type **Regional**, region **ap-southeast-1**, TLS on.
-2. On the database page, copy the **Redis URL** that starts with `rediss://` (two s = TLS):
-   `rediss://default:YOUR_PASSWORD@apn1-xxx.upstash.io:6379` → this is **`REDIS_URL`**.
+2. On the database page you'll see the **Endpoint**, **Port** and **Token** (the password; use the main token, not the read-only one). Build the URL with `rediss://` (two s = TLS):
+   `rediss://default:<TOKEN>@<ENDPOINT>:6379` → this is **`REDIS_URL`**.
 
 ## 3. RabbitMQ on CloudAMQP
 
 1. **Create New Instance** → plan **Little Lemur (free)**, name `seatlock`, region **AWS ap-southeast-1** (or the closest offered).
 2. Open the instance and copy the **AMQP URL**. Change `amqp://` to **`amqps://`** (TLS) if it isn't already:
-   `amqps://abcdefgh:PASSWORD@puffin.rmq2.cloudamqp.com/abcdefgh` → this is **`RABBITMQ_URL`**.
+   `amqps://<USER>:<PASSWORD>@<HOST>/<VHOST>` → this is **`RABBITMQ_URL`**.
 
 The app declares its queues (`booking.confirmed`, `booking.confirmed.dlq`) on startup; you can watch them in CloudAMQP's **RabbitMQ Manager**.
 
