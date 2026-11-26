@@ -1,6 +1,7 @@
 package com.seatlock.service;
 
 import com.seatlock.api.Dtos.*;
+import com.seatlock.domain.Booking;
 import com.seatlock.domain.Event;
 import com.seatlock.domain.EventImage;
 import com.seatlock.domain.Repositories.*;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 
 @Service
 public class EventService {
@@ -30,14 +32,18 @@ public class EventService {
     private final SeatHoldService holds;
     private final EventImageRepository images;
     private final SeatRows seatRows;
+    private final BookingRepository bookings;
+    private final WaitlistRepository waitlist;
 
     public EventService(EventRepository events, SeatRepository seats, SeatHoldService holds, EventImageRepository images,
-                        SeatRows seatRows) {
+                        SeatRows seatRows, BookingRepository bookings, WaitlistRepository waitlist) {
         this.events = events;
         this.seats = seats;
         this.holds = holds;
         this.images = images;
         this.seatRows = seatRows;
+        this.bookings = bookings;
+        this.waitlist = waitlist;
     }
 
     // Cached reads are deliberately not @Transactional: a cache hit must not borrow a pooled DB connection.
@@ -62,7 +68,8 @@ public class EventService {
             Long holder = held.get(s.id());
             String status = s.booked() ? "BOOKED" : holder != null ? "HELD" : "AVAILABLE";
             boolean isMine = !s.booked() && holder != null && holder.equals(viewerId);
-            return new SeatDto(s.id(), s.row(), s.number(), status, isMine, isMine ? expiries.get(s.id()) : null);
+            return new SeatDto(s.id(), s.row(), s.number(), status, isMine, isMine ? expiries.get(s.id()) : null,
+                    s.tier().name(), s.priceCents());
         }).toList();
     }
 
@@ -95,20 +102,61 @@ public class EventService {
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, allEntries = true)})
     @Transactional
     public EventDto create(CreateEventRequest r) {
-        Event e = events.save(new Event(r.title(), r.venue(), r.category(), r.startsAt(), r.priceCents(), r.description()));
+        if (r.vip() + r.premium() > r.rows()) throw new IllegalArgumentException("VIP and Premium rows can't exceed the total rows");
+        Event e = new Event(r.title(), r.venue(), r.category(), r.startsAt(), r.priceCents(), r.description());
+        // Default upgrades: VIP 2x, Premium 1.5x the standard price, rounded to whole rupees.
+        e.setTierPrices(r.vip() > 0 ? Objects.requireNonNullElse(r.vipPriceCents(), roundRupees(r.priceCents() * 2.0)) : null,
+                r.premium() > 0 ? Objects.requireNonNullElse(r.premiumPriceCents(), roundRupees(r.priceCents() * 1.5)) : null);
+        events.save(e);
         List<Seat> grid = new ArrayList<>();
-        for (int row = 0; row < r.rows(); row++)
+        for (int row = 0; row < r.rows(); row++) {
+            Seat.Tier tier = row < r.vip() ? Seat.Tier.VIP : row < r.vip() + r.premium() ? Seat.Tier.PREMIUM : Seat.Tier.STANDARD;
             for (int n = 1; n <= r.seatsPerRow(); n++)
-                grid.add(new Seat(e, String.valueOf((char) ('A' + row)), n));
+                grid.add(new Seat(e, String.valueOf((char) ('A' + row)), n, tier));
+        }
         seats.saveAll(grid);
         return toDto(e);
+    }
+
+    private static int roundRupees(double paise) { return (int) Math.round(paise / 100) * 100; }
+
+    @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId")})
+    @Transactional
+    public EventDto removeImage(Long eventId) {
+        Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        if (images.existsById(eventId)) images.deleteById(eventId);
+        e.imageRemoved();
+        return toDto(e);
+    }
+
+    /** Admin delete. Refused while anyone still holds a confirmed booking: cancel those first. */
+    @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId"),
+                      @CacheEvict(value = SeatRows.CACHE, key = "#eventId")})
+    @Transactional
+    public void delete(Long eventId) {
+        Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        if (bookings.existsByEventIdAndStatus(eventId, Booking.Status.CONFIRMED))
+            throw new EventHasBookingsException();
+        waitlist.deleteByEventId(eventId);
+        seats.deleteByEventId(eventId);
+        bookings.deleteByEventId(eventId); // only cancelled ones are left
+        if (images.existsById(eventId)) images.deleteById(eventId);
+        events.delete(e);
+    }
+
+    public static class EventHasBookingsException extends RuntimeException {
+        public EventHasBookingsException() { super("This event has confirmed bookings. Cancel them before deleting it."); }
     }
 
     private EventDto toDto(Event e) {
         String imageUrl = e.getImageUpdatedAt() == null ? null
                 : "/api/events/" + e.getId() + "/image?v=" + e.getImageUpdatedAt().toEpochMilli();
+        List<TierPrice> tiers = new ArrayList<>();
+        if (e.getVipPriceCents() != null) tiers.add(new TierPrice("VIP", e.getVipPriceCents()));
+        if (e.getPremiumPriceCents() != null) tiers.add(new TierPrice("PREMIUM", e.getPremiumPriceCents()));
+        tiers.add(new TierPrice("STANDARD", e.getPriceCents()));
         return new EventDto(e.getId(), e.getTitle(), e.getVenue(), e.getCategory(), e.getStartsAt(), e.getPriceCents(),
                 seats.countByEventId(e.getId()), seats.countByEventIdAndStatus(e.getId(), Seat.Status.AVAILABLE),
-                e.getDescription(), imageUrl);
+                e.getDescription(), imageUrl, e.city(), tiers);
     }
 }

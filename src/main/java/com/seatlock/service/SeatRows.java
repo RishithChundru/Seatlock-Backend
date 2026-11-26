@@ -1,5 +1,7 @@
 package com.seatlock.service;
 
+import com.seatlock.domain.Event;
+import com.seatlock.domain.Repositories.EventRepository;
 import com.seatlock.domain.Repositories.SeatRepository;
 import com.seatlock.domain.Seat;
 import org.springframework.cache.annotation.Cacheable;
@@ -21,18 +23,23 @@ import java.util.NoSuchElementException;
 public class SeatRows {
     public static final String CACHE = "seatRows";
 
-    public record SeatRow(Long id, String row, int number, boolean booked) implements Serializable {}
+    public record SeatRow(Long id, String row, int number, boolean booked, Seat.Tier tier, int priceCents) implements Serializable {}
 
     private final SeatRepository seats;
+    private final EventRepository events;
 
-    public SeatRows(SeatRepository seats) { this.seats = seats; }
+    public SeatRows(SeatRepository seats, EventRepository events) {
+        this.seats = seats;
+        this.events = events;
+    }
 
     @Cacheable(value = CACHE, sync = true)
     public List<SeatRow> forEvent(Long eventId) {
+        Event event = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
         List<SeatRow> rows = new ArrayList<>();
         for (Seat s : seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId))
-            rows.add(new SeatRow(s.getId(), s.getRowLabel(), s.getSeatNumber(), s.getStatus() == Seat.Status.BOOKED));
-        if (rows.isEmpty()) throw new NoSuchElementException("Event not found"); // every event has seats
+            rows.add(new SeatRow(s.getId(), s.getRowLabel(), s.getSeatNumber(), s.getStatus() == Seat.Status.BOOKED,
+                    s.getTier(), event.priceFor(s.getTier())));
         return rows;
     }
 }

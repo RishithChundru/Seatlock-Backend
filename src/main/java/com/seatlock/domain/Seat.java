@@ -1,11 +1,14 @@
 package com.seatlock.domain;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.ColumnDefault;
 
 @Entity
 @Table(name = "seats", uniqueConstraints = @UniqueConstraint(columnNames = {"event_id", "row_label", "seat_number"}))
 public class Seat {
     public enum Status { AVAILABLE, BOOKED }
+    /** Front rows are VIP, then Premium, then Standard. Prices live on the Event. */
+    public enum Tier { VIP, PREMIUM, STANDARD }
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -19,6 +22,8 @@ public class Seat {
     private Status status = Status.AVAILABLE;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "booking_id")
     private Booking booking;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 10) @ColumnDefault("'STANDARD'")
+    private Tier tier = Tier.STANDARD;
 
     // Optimistic lock: UPDATE ... WHERE version = ? fails for the second of two concurrent bookers.
     @Version
@@ -26,11 +31,15 @@ public class Seat {
 
     protected Seat() {}
 
-    public Seat(Event event, String rowLabel, int seatNumber) {
+    public Seat(Event event, String rowLabel, int seatNumber, Tier tier) {
         this.event = event;
         this.rowLabel = rowLabel;
         this.seatNumber = seatNumber;
+        this.tier = tier;
     }
+
+    public Tier getTier() { return tier; }
+    public int priceCents() { return event.priceFor(tier); }
 
     public void book(Booking booking) {
         this.status = Status.BOOKED;

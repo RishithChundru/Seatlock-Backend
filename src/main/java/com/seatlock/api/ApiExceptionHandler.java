@@ -1,6 +1,8 @@
 package com.seatlock.api;
 
 import com.seatlock.service.BookingService.SeatUnavailableException;
+import com.seatlock.service.BookingService;
+import com.seatlock.service.EventService;
 import com.seatlock.service.WaitlistService;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -40,7 +42,8 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "We're busy right now. Please try again in a moment."));
     }
 
-    @ExceptionHandler(WaitlistService.SeatsStillAvailableException.class)
+    @ExceptionHandler({WaitlistService.SeatsStillAvailableException.class, EventService.EventHasBookingsException.class,
+                       BookingService.CheckInRefusedException.class})
     ProblemDetail seatsAvailable(RuntimeException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }

@@ -16,8 +16,12 @@ public class Event {
     private String category;
     @Column(nullable = false)
     private Instant startsAt;
+    /** Standard-tier price. */
     @Column(nullable = false)
     private int priceCents;
+    /** Null when the event has no seats in that tier (and for events created before tiers existed). */
+    private Integer vipPriceCents;
+    private Integer premiumPriceCents;
     @Column(length = 1000)
     private String description;
     private Instant imageUpdatedAt;
@@ -33,9 +37,29 @@ public class Event {
         this.description = description;
     }
 
+    public void setTierPrices(Integer vipPriceCents, Integer premiumPriceCents) {
+        this.vipPriceCents = vipPriceCents;
+        this.premiumPriceCents = premiumPriceCents;
+    }
+
+    public int priceFor(Seat.Tier tier) {
+        return switch (tier) {
+            case VIP -> vipPriceCents != null ? vipPriceCents : priceCents;
+            case PREMIUM -> premiumPriceCents != null ? premiumPriceCents : priceCents;
+            case STANDARD -> priceCents;
+        };
+    }
+
+    /** "Skyline Arena, Hyderabad" -> "Hyderabad". Venues are entered as "Place, City". */
+    public String city() {
+        int comma = venue.lastIndexOf(',');
+        return comma < 0 ? venue.trim() : venue.substring(comma + 1).trim();
+    }
+
     public String getDescription() { return description; }
     public Instant getImageUpdatedAt() { return imageUpdatedAt; }
     public void imageChanged() { this.imageUpdatedAt = Instant.now(); }
+    public void imageRemoved() { this.imageUpdatedAt = null; }
 
     public Long getId() { return id; }
     public String getTitle() { return title; }
@@ -43,4 +67,6 @@ public class Event {
     public String getCategory() { return category; }
     public Instant getStartsAt() { return startsAt; }
     public int getPriceCents() { return priceCents; }
+    public Integer getVipPriceCents() { return vipPriceCents; }
+    public Integer getPremiumPriceCents() { return premiumPriceCents; }
 }

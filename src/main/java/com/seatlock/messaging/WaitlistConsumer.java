@@ -7,22 +7,26 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Consumes seats.released: the waitlist gets first claim on freed seats, and only then are seat maps
- * told something changed. Safe to redeliver: seats already held or booked are skipped by offer().
+ * Consumes seats.released: the waitlist gets first claim on freed seats, then seat maps are told
+ * something changed, then the people offered a seat are emailed (after the offer transaction commits).
+ * Safe to redeliver: seats already held or booked are skipped by offer().
  */
 @Component
 class WaitlistConsumer {
     private final WaitlistService waitlist;
     private final SeatUpdates updates;
+    private final Mailer mailer;
 
-    WaitlistConsumer(WaitlistService waitlist, SeatUpdates updates) {
+    WaitlistConsumer(WaitlistService waitlist, SeatUpdates updates, Mailer mailer) {
         this.waitlist = waitlist;
         this.updates = updates;
+        this.mailer = mailer;
     }
 
     @RabbitListener(queues = RabbitConfig.SEATS_RELEASED)
     public void handle(SeatsReleased msg) {
-        waitlist.offer(msg.eventId(), msg.seatIds());
+        var offers = waitlist.offer(msg.eventId(), msg.seatIds());
         updates.publish(msg.eventId());
+        offers.forEach(o -> mailer.waitlistOffer(o.email(), o.eventTitle(), o.eventId(), o.seat(), o.expiresAt()));
     }
 }

@@ -28,6 +28,7 @@ public class Booking {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 20) @ColumnDefault("'CONFIRMED'")
     private Status status = Status.CONFIRMED;
     private Instant cancelledAt;
+    private Instant checkedInAt;
     /** "A1,A2": kept so a cancelled booking still shows its seats after they are released. */
     @Column(length = 400)
     private String seatLabels;
@@ -63,6 +64,7 @@ public class Booking {
     public Status getStatus() { return status; }
     public boolean isCancelled() { return status == Status.CANCELLED; }
     public Instant getCancelledAt() { return cancelledAt; }
+    public Instant getCheckedInAt() { return checkedInAt; }
 
     public List<String> seatLabels() {
         if (seatLabels != null) return List.of(seatLabels.split(","));

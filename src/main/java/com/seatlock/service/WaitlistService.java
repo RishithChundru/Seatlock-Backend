@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -75,10 +76,13 @@ public class WaitlistService {
         }).toList();
     }
 
-    /** Offers freed seats to the people at the front of the line. Returns how many offers were made. */
+    /** One seat held for one person in line; the caller emails them after the transaction commits. */
+    public record Offer(String email, String eventTitle, Long eventId, String seat, Instant expiresAt) {}
+
+    /** Offers freed seats to the people at the front of the line. */
     @Transactional
-    public int offer(Long eventId, List<Long> seatIds) {
-        int offers = 0;
+    public List<Offer> offer(Long eventId, List<Long> seatIds) {
+        List<Offer> offers = new ArrayList<>();
         for (Long seatId : seatIds) {
             var next = waitlist.findFirstByEventIdAndOfferedSeatIdIsNullOrderByIdAsc(eventId);
             if (next.isEmpty()) break;
@@ -88,10 +92,8 @@ public class WaitlistService {
             try {
                 var hold = holds.hold(entry.getUser().getId(), eventId, List.of(seatId));
                 entry.offer(seat, hold.expiresAt());
-                offers++;
-                // shortcut: logs instead of sending real email/push; plug a mail client in here
-                log.info("Waitlist: seat {} held for {} until {} ({})", seat.label(), entry.getUser().getEmail(),
-                        hold.expiresAt(), entry.getEvent().getTitle());
+                offers.add(new Offer(entry.getUser().getEmail(), entry.getEvent().getTitle(), eventId, seat.label(), hold.expiresAt()));
+                log.info("Waitlist: seat {} held for {} until {}", seat.label(), entry.getUser().getEmail(), hold.expiresAt());
             } catch (SeatUnavailableException | IllegalArgumentException e) {
                 // Someone grabbed it first, or this person already holds the max; try the next seat.
             }

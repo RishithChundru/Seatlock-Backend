@@ -1,6 +1,8 @@
 package com.seatlock.service;
 
 import com.seatlock.api.Dtos.BookingDto;
+import com.seatlock.api.Dtos.CheckInResult;
+import java.util.Locale;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
 import org.springframework.context.ApplicationEventPublisher;
@@ -22,7 +24,8 @@ public class BookingService {
     /** Carries everything the after-commit work needs, so that work never borrows a second DB connection. */
     public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds,
                                    String email, String eventTitle, List<String> seatLabels) {}
-    public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds) {}
+    public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds,
+                                   String email, String eventTitle, List<String> seatLabels, int refundCents) {}
 
     private final BookingRepository bookings;
     private final SeatRepository seats;
@@ -66,7 +69,8 @@ public class BookingService {
 
         holds.assertBookable(userId, seatIds);
 
-        Booking booking = bookings.save(new Booking(user, event, event.getPriceCents() * selected.size(), idempotencyKey));
+        int total = selected.stream().mapToInt(Seat::priceCents).sum(); // tiers: VIP/Premium/Standard
+        Booking booking = bookings.save(new Booking(user, event, total, idempotencyKey));
         selected.forEach(s -> s.book(booking));
         booking.recordSeatLabels();
         seats.saveAllAndFlush(selected); // version check fires here, inside the transaction
@@ -93,8 +97,30 @@ public class BookingService {
 
         List<Seat> freed = booking.cancel();
         seats.saveAllAndFlush(freed);
-        publisher.publishEvent(new BookingCancelled(booking.getId(), booking.getEvent().getId(), freed.stream().map(Seat::getId).toList()));
+        publisher.publishEvent(new BookingCancelled(booking.getId(), booking.getEvent().getId(), freed.stream().map(Seat::getId).toList(),
+                booking.getUser().getEmail(), booking.getEvent().getTitle(), booking.seatLabels(), booking.getTotalCents()));
         return BookingDto.of(booking);
+    }
+
+    /**
+     * Gate check-in by ticket code. The conditional UPDATE makes double admission impossible even with
+     * several scanners; a second scan reports when the ticket was first used.
+     */
+    @Transactional
+    public CheckInResult checkIn(String rawCode, Long eventId) {
+        String code = rawCode.trim().toUpperCase(Locale.ROOT);
+        Booking b = bookings.findByTicketCode(code).orElseThrow(() -> new NoSuchElementException("No ticket with code " + code));
+        if (eventId != null && !b.getEvent().getId().equals(eventId))
+            throw new CheckInRefusedException("This ticket is for " + b.getEvent().getTitle());
+        if (b.isCancelled()) throw new CheckInRefusedException("This booking was cancelled");
+        boolean admitted = bookings.checkIn(b.getId(), Instant.now()) == 1;
+        Booking fresh = bookings.findById(b.getId()).orElseThrow();
+        return new CheckInResult(admitted ? "ADMITTED" : "ALREADY_CHECKED_IN", fresh.getId(), fresh.getEvent().getTitle(),
+                fresh.getUser().getName(), fresh.seatLabels(), fresh.getCheckedInAt());
+    }
+
+    public static class CheckInRefusedException extends RuntimeException {
+        public CheckInRefusedException(String message) { super(message); }
     }
 
     @Transactional(readOnly = true)
