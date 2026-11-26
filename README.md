@@ -120,7 +120,7 @@ All settings are environment variables. Locally they come from `.env`; in produc
 | `MAIL_FROM` | optional | `Seatlock <tickets@seatlock.local>` | Sender address |
 | `FRONTEND_URL` | ✅ for email links | `http://localhost:3000` | Where links in emails point |
 | `DB_POOL_SIZE` | optional | `10` | Max DB connections per instance (hot reads use Redis, so this backs writes) |
-| `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | optional | `15m` / `14d` | Session lifetimes |
+| `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | optional | `1h` / `7d` | Session lifetimes |
 | `COOKIE_SECURE` | ✅ `true` | `false` | Auth cookies only over HTTPS |
 | `METRICS_TOKEN` | optional | *(empty = closed)* | Password for `/actuator/prometheus` (user `prometheus`) |
 | `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_URL`, `S3_REGION` | optional | *(empty = covers in Postgres)* | Store covers in Cloudflare R2 / S3; see [DEPLOY.md](DEPLOY.md#cover-images-on-cloudflare-r2-optional) |
@@ -204,7 +204,7 @@ docker run --rm -i -v "$PWD/load:/scripts" \
 
 ### Sessions: both tokens in httpOnly cookies
 
-Login sets two cookies, both `HttpOnly`, `SameSite=Lax`, and `Secure` in production: `sl_access` (15-minute JWT) and `sl_refresh` (14-day opaque token). The browser app never sees a token, so an XSS bug can't steal a session. The frontend calls the API through its own `/api` proxy, so the cookies are first-party.
+Login sets two cookies, both `HttpOnly`, `SameSite=Lax`, and `Secure` in production: `sl_access` (1-hour JWT) and `sl_refresh` (7-day opaque token). The browser app never sees a token, so an XSS bug can't steal a session. The frontend calls the API through its own `/api` proxy, so the cookies are first-party.
 
 - **Rotation with reuse detection.** Every refresh swaps the refresh token for a new one; only SHA-256 hashes are stored. A rotated token showing up again means it was copied, so the whole login (token family) is revoked. A 30 s grace window covers two tabs refreshing at once.
 - **CSRF.** SameSite=Lax stops cross-site POSTs from carrying the cookies, and every cookie-authenticated write must also send `X-Requested-With` (403 otherwise), a header other sites can't add without passing CORS.
@@ -312,4 +312,4 @@ Neon (Postgres) + Upstash (Redis) + CloudAMQP (RabbitMQ) + Render (API, Docker) 
 
 - Push hold expiries too (Redis keyspace notifications), instead of the 30 s backup refetch
 - Rate limiting on login and holds (Redis token bucket)
-- Revoke the short-lived access token at logout too (today it lapses within 15 minutes)
+- Revoke the short-lived access token at logout too (today it lapses within an hour)
