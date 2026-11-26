@@ -1,12 +1,15 @@
 package com.seatlock.service;
 
 import com.seatlock.api.Dtos.BookingDto;
+import com.seatlock.api.Dtos.CheckInResult;
+import java.util.Locale;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -18,22 +21,28 @@ public class BookingService {
         public SeatUnavailableException() { super("One or more selected seats were just booked by someone else"); }
     }
 
-    public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds) {}
+    /** Carries everything the after-commit work needs, so that work never borrows a second DB connection. */
+    public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds,
+                                   String email, String eventTitle, List<String> seatLabels) {}
+    public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds,
+                                   String email, String eventTitle, List<String> seatLabels, int refundCents) {}
 
     private final BookingRepository bookings;
     private final SeatRepository seats;
     private final EventRepository events;
     private final UserRepository users;
     private final SeatHoldService holds;
+    private final WaitlistRepository waitlist;
     private final ApplicationEventPublisher publisher;
 
     public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users,
-                          SeatHoldService holds, ApplicationEventPublisher publisher) {
+                          SeatHoldService holds, WaitlistRepository waitlist, ApplicationEventPublisher publisher) {
         this.bookings = bookings;
         this.seats = seats;
         this.events = events;
         this.users = users;
         this.holds = holds;
+        this.waitlist = waitlist;
         this.publisher = publisher;
     }
 
@@ -60,12 +69,58 @@ public class BookingService {
 
         holds.assertBookable(userId, seatIds);
 
-        Booking booking = bookings.save(new Booking(user, event, event.getPriceCents() * selected.size(), idempotencyKey));
+        int total = selected.stream().mapToInt(Seat::priceCents).sum(); // tiers: VIP/Premium/Standard
+        Booking booking = bookings.save(new Booking(user, event, total, idempotencyKey));
         selected.forEach(s -> s.book(booking));
+        booking.recordSeatLabels();
         seats.saveAllAndFlush(selected); // version check fires here, inside the transaction
+        waitlist.deleteByEventIdAndUserId(eventId, userId); // got a seat: no longer waiting for this event
         // Delivered only after commit (see BookingEvents): evict cache, release holds, publish to RabbitMQ.
-        publisher.publishEvent(new BookingCommitted(booking.getId(), userId, eventId, seatIds));
+        publisher.publishEvent(new BookingCommitted(booking.getId(), userId, eventId, seatIds,
+                user.getEmail(), event.getTitle(), booking.seatLabels()));
         return BookingDto.of(booking);
+    }
+
+    /**
+     * Cancels the caller's own booking before the event starts and puts its seats back on sale.
+     * Idempotent: cancelling twice returns the already-cancelled booking. After commit, the freed
+     * seats go to RabbitMQ so the waitlist gets first claim (see BookingEvents / WaitlistConsumer).
+     */
+    @Transactional
+    public BookingDto cancel(Long userId, Long bookingId) {
+        // Someone else's booking id looks exactly like a missing one: no probing other users' bookings.
+        Booking booking = bookings.findById(bookingId).filter(b -> b.getUser().getId().equals(userId))
+                .orElseThrow(() -> new NoSuchElementException("Booking not found"));
+        if (booking.isCancelled()) return BookingDto.of(booking);
+        if (!booking.getEvent().getStartsAt().isAfter(Instant.now()))
+            throw new IllegalArgumentException("This event has already started and can't be cancelled");
+
+        List<Seat> freed = booking.cancel();
+        seats.saveAllAndFlush(freed);
+        publisher.publishEvent(new BookingCancelled(booking.getId(), booking.getEvent().getId(), freed.stream().map(Seat::getId).toList(),
+                booking.getUser().getEmail(), booking.getEvent().getTitle(), booking.seatLabels(), booking.getTotalCents()));
+        return BookingDto.of(booking);
+    }
+
+    /**
+     * Gate check-in by ticket code. The conditional UPDATE makes double admission impossible even with
+     * several scanners; a second scan reports when the ticket was first used.
+     */
+    @Transactional
+    public CheckInResult checkIn(String rawCode, Long eventId) {
+        String code = rawCode.trim().toUpperCase(Locale.ROOT);
+        Booking b = bookings.findByTicketCode(code).orElseThrow(() -> new NoSuchElementException("No ticket with code " + code));
+        if (eventId != null && !b.getEvent().getId().equals(eventId))
+            throw new CheckInRefusedException("This ticket is for " + b.getEvent().getTitle());
+        if (b.isCancelled()) throw new CheckInRefusedException("This booking was cancelled");
+        boolean admitted = bookings.checkIn(b.getId(), Instant.now()) == 1;
+        Booking fresh = bookings.findById(b.getId()).orElseThrow();
+        return new CheckInResult(admitted ? "ADMITTED" : "ALREADY_CHECKED_IN", fresh.getId(), fresh.getEvent().getTitle(),
+                fresh.getUser().getName(), fresh.seatLabels(), fresh.getCheckedInAt());
+    }
+
+    public static class CheckInRefusedException extends RuntimeException {
+        public CheckInRefusedException(String message) { super(message); }
     }
 
     @Transactional(readOnly = true)

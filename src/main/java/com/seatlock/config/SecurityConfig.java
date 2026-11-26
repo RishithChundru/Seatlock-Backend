@@ -36,6 +36,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/auth/**", "/actuator/health").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/events/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/events", "/api/events/*/image").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/events/*", "/api/events/*/image").hasRole("ADMIN")
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.jwt(j -> j.jwtAuthenticationConverter(rolesConverter())));
         return http.build();

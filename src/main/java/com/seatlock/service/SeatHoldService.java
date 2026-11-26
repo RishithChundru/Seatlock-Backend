@@ -2,7 +2,8 @@ package com.seatlock.service;
 
 import com.seatlock.api.Dtos.HoldResponse;
 import com.seatlock.domain.Repositories.SeatRepository;
-import com.seatlock.domain.Seat;
+import com.seatlock.realtime.SeatUpdates;
+import com.seatlock.service.SeatRows.SeatRow;
 import com.seatlock.service.BookingService.SeatUnavailableException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Checkout holds in Redis: SET hold:seat:{id} {userId} NX EX 300.
@@ -28,24 +30,29 @@ public class SeatHoldService {
 
     private final StringRedisTemplate redis;
     private final SeatRepository seats;
+    private final SeatUpdates updates;
+    private final SeatRows seatRows;
 
-    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats) {
+    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats, SeatUpdates updates, SeatRows seatRows) {
         this.redis = redis;
         this.seats = seats;
+        this.updates = updates;
+        this.seatRows = seatRows;
     }
 
     static String key(Long seatId) { return "hold:seat:" + seatId; }
 
     public HoldResponse hold(Long userId, Long eventId, List<Long> seatIds) {
-        List<Seat> eventSeats = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId);
-        Map<Long, Seat> byId = new HashMap<>();
-        eventSeats.forEach(s -> byId.put(s.getId(), s));
+        // Cached seat rows: no DB connection on the hot path. If stale, booking's @Version check still decides.
+        List<SeatRow> eventSeats = seatRows.forEvent(eventId);
+        Map<Long, SeatRow> byId = new HashMap<>();
+        eventSeats.forEach(s -> byId.put(s.id(), s));
         if (new HashSet<>(seatIds).size() != seatIds.size() || !byId.keySet().containsAll(seatIds))
             throw new IllegalArgumentException("Seats do not belong to this event");
-        if (seatIds.stream().anyMatch(id -> byId.get(id).getStatus() != Seat.Status.AVAILABLE))
+        if (seatIds.stream().anyMatch(id -> byId.get(id).booked()))
             throw new SeatUnavailableException();
 
-        Map<Long, Long> holders = holders(eventSeats.stream().map(Seat::getId).toList());
+        Map<Long, Long> holders = holders(eventSeats.stream().map(SeatRow::id).toList());
         String me = userId.toString();
         long alreadyMine = holders.values().stream().filter(userId::equals).count();
         long fresh = seatIds.stream().filter(id -> !userId.equals(holders.get(id))).count();
@@ -65,11 +72,29 @@ public class SeatHoldService {
             }
             acquired.add(id);
         }
+        updates.publish(eventId);
         return new HoldResponse(acquired, Instant.now().plus(TTL));
     }
 
     public void release(Long userId, Long seatId) {
         redis.execute(RELEASE_IF_OWNER, List.of(key(seatId)), userId.toString());
+    }
+
+    /** A customer letting go of a seat: release it and tell everyone watching that event. */
+    public void releaseAndNotify(Long userId, Long seatId) {
+        release(userId, seatId);
+        seats.findById(seatId).ifPresent(s -> updates.publish(s.getEvent().getId()));
+    }
+
+    /** seatId -> when its hold expires, for the given seats that have a live hold. */
+    public Map<Long, Instant> expiries(List<Long> seatIds) {
+        Map<Long, Instant> out = new HashMap<>();
+        Instant now = Instant.now();
+        for (Long id : seatIds) {
+            Long ms = redis.getExpire(key(id), TimeUnit.MILLISECONDS);
+            if (ms != null && ms > 0) out.put(id, now.plusMillis(ms));
+        }
+        return out;
     }
 
     /** seatId -> userId holding it, for seats with a live hold. */

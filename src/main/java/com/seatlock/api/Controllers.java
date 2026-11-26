@@ -4,9 +4,13 @@ import com.seatlock.api.Dtos.*;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.UserRepository;
 import com.seatlock.service.BookingService;
+import com.seatlock.service.EventSearch;
 import com.seatlock.service.EventService;
+import com.seatlock.realtime.SeatUpdates;
 import com.seatlock.service.SeatHoldService;
+import com.seatlock.service.WaitlistService;
 import jakarta.validation.Valid;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import com.seatlock.domain.EventImage;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -72,11 +76,36 @@ final class Controllers {
     @RequestMapping("/api/events")
     static class EventController {
         private final EventService events;
+        private final EventSearch search;
+        private final SeatUpdates updates;
+        private final WaitlistService waitlist;
 
-        EventController(EventService events) { this.events = events; }
+        EventController(EventService events, EventSearch search, SeatUpdates updates, WaitlistService waitlist) {
+            this.events = events;
+            this.search = search;
+            this.updates = updates;
+            this.waitlist = waitlist;
+        }
 
         @GetMapping
         List<EventDto> list() { return events.list(); }
+
+        /** Upcoming events, filtered and paginated: ?q=&category=&city=&from=&to=&maxPrice=(paise)&page=&size= */
+        @GetMapping("/search")
+        EventPage search(@RequestParam(required = false) String q, @RequestParam(required = false) String category,
+                         @RequestParam(required = false) String city, @RequestParam(required = false) Instant from,
+                         @RequestParam(required = false) Instant to, @RequestParam(required = false) Integer maxPrice,
+                         @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "12") int size) {
+            if (page < 0 || size < 1 || size > 50) throw new IllegalArgumentException("page must be >= 0 and size 1-50");
+            return search.search(q, category, city, from, to, maxPrice, page, size);
+        }
+
+        @DeleteMapping("/{id}")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void delete(@PathVariable Long id) { events.delete(id); }
+
+        @DeleteMapping("/{id}/image")
+        EventDto removeImage(@PathVariable Long id) { return events.removeImage(id); }
 
         @GetMapping("/{id}")
         EventDto get(@PathVariable Long id) { return events.get(id); }
@@ -84,6 +113,30 @@ final class Controllers {
         @GetMapping("/{id}/seats")
         List<SeatDto> seats(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
             return events.seats(id, user == null ? null : Long.valueOf(user.getSubject()));
+        }
+
+        /** Server-Sent Events: a "seats" event whenever this event's seat map changes. */
+        @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+        SseEmitter stream(@PathVariable Long id) {
+            events.get(id); // 404 for unknown events
+            return updates.subscribe(id);
+        }
+
+        @GetMapping("/{id}/waitlist")
+        WaitlistStatus waitlistStatus(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
+            if (user == null) return new WaitlistStatus(false, null, null, null);
+            return waitlist.statusFor(Long.valueOf(user.getSubject()), id);
+        }
+
+        @PostMapping("/{id}/waitlist")
+        WaitlistStatus joinWaitlist(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
+            return waitlist.join(Long.valueOf(user.getSubject()), id);
+        }
+
+        @DeleteMapping("/{id}/waitlist")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void leaveWaitlist(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
+            waitlist.leave(Long.valueOf(user.getSubject()), id);
         }
 
         @PostMapping
@@ -120,7 +173,7 @@ final class Controllers {
         @DeleteMapping("/{seatId}")
         @ResponseStatus(HttpStatus.NO_CONTENT)
         void release(@AuthenticationPrincipal Jwt user, @PathVariable Long seatId) {
-            holds.release(Long.valueOf(user.getSubject()), seatId);
+            holds.releaseAndNotify(Long.valueOf(user.getSubject()), seatId);
         }
     }
 
@@ -141,5 +194,66 @@ final class Controllers {
 
         @GetMapping("/me")
         List<BookingDto> mine(@AuthenticationPrincipal Jwt user) { return bookings.forUser(Long.valueOf(user.getSubject())); }
+
+        @PostMapping("/{id}/cancel")
+        BookingDto cancel(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            return bookings.cancel(Long.valueOf(user.getSubject()), id);
+        }
+    }
+
+    @RestController
+    @RequestMapping("/api/admin")
+    static class AdminController {
+        private final BookingService bookings;
+
+        AdminController(BookingService bookings) { this.bookings = bookings; }
+
+        /** Gate check-in: scan or type the ticket code. ADMIN only (see SecurityConfig). */
+        @PostMapping("/checkin")
+        CheckInResult checkIn(@Valid @RequestBody CheckInRequest r) { return bookings.checkIn(r.code(), r.eventId()); }
+    }
+
+    @RestController
+    @RequestMapping("/api/account")
+    static class AccountController {
+        private final UserRepository users;
+        private final PasswordEncoder encoder;
+
+        AccountController(UserRepository users, PasswordEncoder encoder) {
+            this.users = users;
+            this.encoder = encoder;
+        }
+
+        @GetMapping("/me")
+        UserDto me(@AuthenticationPrincipal Jwt user) {
+            return UserDto.of(users.findById(Long.valueOf(user.getSubject())).orElseThrow());
+        }
+
+        /**
+         * Needs the current password. shortcut: tokens already issued stay valid until they expire (12 h);
+         * add a token version claim to revoke them on password change.
+         */
+        @PostMapping("/password")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void changePassword(@AuthenticationPrincipal Jwt user, @Valid @RequestBody ChangePasswordRequest r) {
+            AppUser u = users.findById(Long.valueOf(user.getSubject())).orElseThrow();
+            if (!encoder.matches(r.currentPassword(), u.getPasswordHash()))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Your current password is incorrect");
+            if (r.currentPassword().equals(r.newPassword()))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a password you haven't used here before");
+            u.changePasswordHash(encoder.encode(r.newPassword()));
+            users.save(u);
+        }
+    }
+
+    @RestController
+    @RequestMapping("/api/waitlist")
+    static class WaitlistController {
+        private final WaitlistService waitlist;
+
+        WaitlistController(WaitlistService waitlist) { this.waitlist = waitlist; }
+
+        @GetMapping("/me")
+        List<WaitlistItem> mine(@AuthenticationPrincipal Jwt user) { return waitlist.mine(Long.valueOf(user.getSubject())); }
     }
 }
