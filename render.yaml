@@ -1,0 +1,28 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# Values marked sync: false are prompted for once and stored as secrets in Render, never in git.
+services:
+  - type: web
+    name: seatlock-api
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /actuator/health
+    # CI deploys via the deploy hook only after tests pass (.github/workflows/ci.yml)
+    autoDeploy: false
+    envVars:
+      - key: DB_URL
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true

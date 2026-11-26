@@ -64,11 +64,15 @@ The API runs on http://localhost:8080 and the RabbitMQ UI on http://localhost:15
 | Role  | Email               | Password    |
 |-------|---------------------|-------------|
 | User  | demo@seatlock.dev   | Demo@12345  |
-| Admin | admin@seatlock.dev  | Admin@12345 |
+| Admin | admin@seatlock.dev  | Admin@12345 locally (`ADMIN_PASSWORD` in production) |
 
 **Tests:** `.\mvnw.cmd test` (needs Docker running)
 
-Config via env vars: `DB_URL`, `DB_USER`, `DB_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`, `RABBIT_HOST`, `RABBIT_USER`, `RABBIT_PASSWORD`, `JWT_SECRET` (32+ bytes), `CORS_ORIGIN`.
+Config via env vars (all optional locally; see [`.env.example`](.env.example)): `DB_URL`, `DB_USER`, `DB_PASSWORD`, `REDIS_URL`, `RABBITMQ_URL`, `JWT_SECRET` (32+ bytes), `ADMIN_PASSWORD`, `CORS_ORIGINS`. A `.env` file in this folder is loaded automatically for local runs.
+
+## Deploy
+
+Neon (Postgres) + Upstash (Redis) + CloudAMQP (RabbitMQ) + Render (API, Docker) + Vercel (frontend), all on free tiers. CI runs the Testcontainers suite and a Docker build on every push; `main` deploys to Render only when both pass. Step-by-step: **[DEPLOY.md](DEPLOY.md)**.
 
 ## API
 

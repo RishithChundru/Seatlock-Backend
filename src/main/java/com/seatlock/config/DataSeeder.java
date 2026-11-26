@@ -6,6 +6,7 @@ import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.*;
 import com.seatlock.service.BookingService;
 import com.seatlock.service.EventService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -15,7 +16,10 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
-/** Demo data on an empty database. Test logins: admin@seatlock.dev / Admin@12345, demo@seatlock.dev / Demo@12345 */
+/**
+ * Demo data on an empty database. Logins: demo@seatlock.dev / Demo@12345 (public demo account) and
+ * admin@seatlock.dev with ADMIN_PASSWORD (defaults to Admin@12345 locally; always set it in production).
+ */
 @Component
 class DataSeeder implements CommandLineRunner {
     private final UserRepository users;
@@ -24,21 +28,23 @@ class DataSeeder implements CommandLineRunner {
     private final EventService events;
     private final BookingService bookings;
     private final PasswordEncoder encoder;
+    private final String adminPassword;
 
     DataSeeder(UserRepository users, EventRepository eventRepo, SeatRepository seats, EventService events,
-               BookingService bookings, PasswordEncoder encoder) {
+               BookingService bookings, PasswordEncoder encoder, @Value("${app.seed.admin-password}") String adminPassword) {
         this.users = users;
         this.eventRepo = eventRepo;
         this.seats = seats;
         this.events = events;
         this.bookings = bookings;
         this.encoder = encoder;
+        this.adminPassword = adminPassword;
     }
 
     @Override
     public void run(String... args) {
         if (eventRepo.count() > 0) return;
-        AppUser admin = users.save(new AppUser("admin@seatlock.dev", "Admin", encoder.encode("Admin@12345"), AppUser.Role.ADMIN));
+        AppUser admin = users.save(new AppUser("admin@seatlock.dev", "Admin", encoder.encode(adminPassword), AppUser.Role.ADMIN));
         users.save(new AppUser("demo@seatlock.dev", "Demo User", encoder.encode("Demo@12345"), AppUser.Role.USER));
 
         Instant day = Instant.now().truncatedTo(ChronoUnit.DAYS).plus(Duration.ofHours(14)); // 19:30 IST
