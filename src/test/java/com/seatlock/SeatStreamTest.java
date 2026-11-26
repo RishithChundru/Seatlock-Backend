@@ -10,7 +10,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 
+import com.seatlock.api.Dtos.CreateEventRequest;
 import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -31,12 +34,14 @@ class SeatStreamTest {
     @Autowired EventRepository events;
     @Autowired SeatRepository seats;
     @Autowired UserRepository users;
+    @Autowired com.seatlock.service.EventService eventService;
 
     @Test
     void streamPushesAnUpdateWhenASeatIsHeld() throws Exception {
-        Long eventId = events.findAllByOrderByStartsAtAsc().get(0).getId();
-        Seat seat = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId).stream()
-                .filter(s -> s.getStatus() == Seat.Status.AVAILABLE).findFirst().orElseThrow();
+        // Own event: test classes share a database and run in arbitrary order on CI.
+        Long eventId = eventService.create(new CreateEventRequest("Stream " + UUID.randomUUID(), "Hall, Test City", "Concert",
+                Instant.now().plus(Duration.ofDays(7)), 1000, 1, 2, null)).id();
+        Seat seat = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId).get(0);
         Long user = users.save(new AppUser("sse-" + UUID.randomUUID() + "@test.local", "Sse", "x", AppUser.Role.USER)).getId();
 
         BlockingQueue<String> lines = new LinkedBlockingQueue<>();

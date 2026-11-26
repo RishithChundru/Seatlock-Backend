@@ -5,6 +5,10 @@ import com.seatlock.domain.Repositories.*;
 import com.seatlock.domain.Seat;
 import com.seatlock.service.BookingService;
 import com.seatlock.service.SeatHoldService;
+import com.seatlock.service.EventService;
+import com.seatlock.api.Dtos.CreateEventRequest;
+import java.time.Duration;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,14 +35,16 @@ class BookingConcurrencyTest {
     @Autowired EventRepository events;
     @Autowired UserRepository users;
     @Autowired BookingRepository bookingRepo;
+    @Autowired EventService eventService;
 
-    /** A seat that is free in the DB and not held in Redis, so tests never interfere with each other. */
+    /**
+     * A seat on a brand-new event of its own. Test classes share one database and run in filesystem
+     * order (arbitrary on Linux CI), so never pick "the first event" another test may have sold out.
+     */
     private Seat freeSeat() {
-        Long eventId = events.findAllByOrderByStartsAtAsc().get(0).getId();
-        List<Seat> available = seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId).stream()
-                .filter(s -> s.getStatus() == Seat.Status.AVAILABLE).toList();
-        var held = holds.holders(available.stream().map(Seat::getId).toList()).keySet();
-        return available.stream().filter(s -> !held.contains(s.getId())).findFirst().orElseThrow();
+        var ev = eventService.create(new CreateEventRequest("Race " + UUID.randomUUID(), "Hall, Test City", "Concert",
+                Instant.now().plus(Duration.ofDays(7)), 1000, 1, 2, null));
+        return seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(ev.id()).get(0);
     }
 
     /** Tests create their own customers; synchronized because race() calls this from many threads. */
