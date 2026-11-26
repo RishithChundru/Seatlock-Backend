@@ -25,6 +25,9 @@ public class Event {
     @Column(length = 1000)
     private String description;
     private Instant imageUpdatedAt;
+    /** Object-storage key when the cover lives in S3/R2; null when it's in Postgres (or there's none). */
+    @Column(length = 200)
+    private String imageKey;
 
     protected Event() {}
 
@@ -59,7 +62,9 @@ public class Event {
     public String getDescription() { return description; }
     public Instant getImageUpdatedAt() { return imageUpdatedAt; }
     public void imageChanged() { this.imageUpdatedAt = Instant.now(); }
-    public void imageRemoved() { this.imageUpdatedAt = null; }
+    public void imageRemoved() { this.imageUpdatedAt = null; this.imageKey = null; }
+    public String getImageKey() { return imageKey; }
+    public void setImageKey(String imageKey) { this.imageKey = imageKey; }
 
     public Long getId() { return id; }
     public String getTitle() { return title; }

@@ -33,7 +33,11 @@ public class SeatHoldService {
     private final SeatUpdates updates;
     private final SeatRows seatRows;
 
-    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats, SeatUpdates updates, SeatRows seatRows) {
+    private final com.seatlock.config.SeatlockMetrics metrics;
+
+    public SeatHoldService(StringRedisTemplate redis, SeatRepository seats, SeatUpdates updates, SeatRows seatRows,
+                           com.seatlock.config.SeatlockMetrics metrics) {
+        this.metrics = metrics;
         this.redis = redis;
         this.seats = seats;
         this.updates = updates;
@@ -72,6 +76,7 @@ public class SeatHoldService {
             }
             acquired.add(id);
         }
+        metrics.holdPlaced();
         updates.publish(eventId);
         return new HoldResponse(acquired, Instant.now().plus(TTL));
     }

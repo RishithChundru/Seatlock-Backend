@@ -39,6 +39,20 @@ public final class Repositories {
         void deleteByEventId(Long eventId);
     }
 
+    public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long> {
+        // The user is always needed (access token claims, /session) and often used after the transaction ends.
+        @org.springframework.data.jpa.repository.EntityGraph(attributePaths = "user")
+        Optional<RefreshToken> findByTokenHash(String tokenHash);
+
+        @Modifying(clearAutomatically = true)
+        @Query("update RefreshToken t set t.revokedAt = :at where t.familyId = :family and t.revokedAt is null")
+        int revokeFamily(@Param("family") java.util.UUID family, @Param("at") Instant at);
+
+        @Modifying(clearAutomatically = true)
+        @Query("update RefreshToken t set t.revokedAt = :at where t.user.id = :userId and t.revokedAt is null and t.familyId <> :keep")
+        int revokeOtherFamilies(@Param("userId") Long userId, @Param("keep") java.util.UUID keep, @Param("at") Instant at);
+    }
+
     public interface BookingRepository extends JpaRepository<Booking, Long> {
         List<Booking> findByUserIdOrderByCreatedAtDesc(Long userId);
         Optional<Booking> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);

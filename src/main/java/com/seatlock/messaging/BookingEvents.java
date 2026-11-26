@@ -31,8 +31,11 @@ class BookingEvents {
     private final BookingRepository bookings;
     private final SeatHoldService holds;
     private final SeatUpdates updates;
+    private final com.seatlock.config.SeatlockMetrics metrics;
 
-    BookingEvents(RabbitTemplate rabbit, BookingRepository bookings, SeatHoldService holds, SeatUpdates updates) {
+    BookingEvents(RabbitTemplate rabbit, BookingRepository bookings, SeatHoldService holds, SeatUpdates updates,
+                  com.seatlock.config.SeatlockMetrics metrics) {
+        this.metrics = metrics;
         this.rabbit = rabbit;
         this.bookings = bookings;
         this.holds = holds;
@@ -49,6 +52,7 @@ class BookingEvents {
                       @CacheEvict(value = EventService.ITEM_CACHE, key = "#e.eventId", beforeInvocation = true),
                       @CacheEvict(value = SeatRows.CACHE, key = "#e.eventId", beforeInvocation = true)})
     public void onCommit(BookingCommitted e) {
+        metrics.bookingConfirmed();
         e.seatIds().forEach(id -> holds.release(e.userId(), id));
         send(new BookingConfirmed(e.bookingId(), e.email(), e.eventTitle(), e.seatLabels()));
         updates.publish(e.eventId());
@@ -65,6 +69,7 @@ class BookingEvents {
                       @CacheEvict(value = EventService.ITEM_CACHE, key = "#e.eventId", beforeInvocation = true),
                       @CacheEvict(value = SeatRows.CACHE, key = "#e.eventId", beforeInvocation = true)})
     public void onCancel(BookingCancelled e) {
+        metrics.cancelled();
         try {
             rabbit.convertAndSend(RabbitConfig.SEATS_RELEASED, new SeatsReleased(e.eventId(), e.seatIds()));
         } catch (RuntimeException ex) {

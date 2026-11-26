@@ -34,9 +34,12 @@ public class BookingService {
     private final SeatHoldService holds;
     private final WaitlistRepository waitlist;
     private final ApplicationEventPublisher publisher;
+    private final com.seatlock.config.SeatlockMetrics metrics;
 
     public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users,
-                          SeatHoldService holds, WaitlistRepository waitlist, ApplicationEventPublisher publisher) {
+                          SeatHoldService holds, WaitlistRepository waitlist, ApplicationEventPublisher publisher,
+                          com.seatlock.config.SeatlockMetrics metrics) {
+        this.metrics = metrics;
         this.bookings = bookings;
         this.seats = seats;
         this.events = events;
@@ -109,11 +112,21 @@ public class BookingService {
     @Transactional
     public CheckInResult checkIn(String rawCode, Long eventId) {
         String code = rawCode.trim().toUpperCase(Locale.ROOT);
-        Booking b = bookings.findByTicketCode(code).orElseThrow(() -> new NoSuchElementException("No ticket with code " + code));
-        if (eventId != null && !b.getEvent().getId().equals(eventId))
+        Booking b = bookings.findByTicketCode(code).orElse(null);
+        if (b == null) {
+            metrics.checkIn("unknown");
+            throw new NoSuchElementException("No ticket with code " + code);
+        }
+        if (eventId != null && !b.getEvent().getId().equals(eventId)) {
+            metrics.checkIn("refused");
             throw new CheckInRefusedException("This ticket is for " + b.getEvent().getTitle());
-        if (b.isCancelled()) throw new CheckInRefusedException("This booking was cancelled");
+        }
+        if (b.isCancelled()) {
+            metrics.checkIn("refused");
+            throw new CheckInRefusedException("This booking was cancelled");
+        }
         boolean admitted = bookings.checkIn(b.getId(), Instant.now()) == 1;
+        metrics.checkIn(admitted ? "admitted" : "repeat");
         Booking fresh = bookings.findById(b.getId()).orElseThrow();
         return new CheckInResult(admitted ? "ADMITTED" : "ALREADY_CHECKED_IN", fresh.getId(), fresh.getEvent().getTitle(),
                 fresh.getUser().getName(), fresh.seatLabels(), fresh.getCheckedInAt());

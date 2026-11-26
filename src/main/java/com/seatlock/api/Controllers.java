@@ -3,7 +3,10 @@ package com.seatlock.api;
 import com.seatlock.api.Dtos.*;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.UserRepository;
+import com.seatlock.service.AuthService;
 import com.seatlock.service.BookingService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import com.seatlock.service.EventSearch;
 import com.seatlock.service.EventService;
 import com.seatlock.realtime.SeatUpdates;
@@ -20,8 +23,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.*;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -33,42 +35,89 @@ import java.util.Locale;
 final class Controllers {
     private Controllers() {}
 
+    /**
+     * Login, register and refresh return a short-lived access token in the body and set the refresh token as an
+     * httpOnly, SameSite=Lax cookie (JavaScript can't read it, other sites' forms can't send it).
+     */
     @RestController
     @RequestMapping("/api/auth")
     static class AuthController {
+        static final String COOKIE = com.seatlock.config.SecurityConfig.REFRESH_COOKIE;
+        static final String ACCESS_COOKIE = com.seatlock.config.SecurityConfig.ACCESS_COOKIE;
+
         private final UserRepository users;
         private final PasswordEncoder encoder;
-        private final JwtEncoder jwt;
+        private final AuthService auth;
+        private final boolean secureCookie;
 
-        AuthController(UserRepository users, PasswordEncoder encoder, JwtEncoder jwt) {
+        AuthController(UserRepository users, PasswordEncoder encoder, AuthService auth,
+                       @org.springframework.beans.factory.annotation.Value("${app.auth.cookie-secure}") boolean secureCookie) {
             this.users = users;
             this.encoder = encoder;
-            this.jwt = jwt;
+            this.auth = auth;
+            this.secureCookie = secureCookie;
         }
 
         @PostMapping("/register")
-        @ResponseStatus(HttpStatus.CREATED)
-        AuthResponse register(@Valid @RequestBody RegisterRequest r) {
+        ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest r) {
             String email = r.email().trim().toLowerCase(Locale.ROOT);
             if (users.existsByEmail(email)) throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already registered");
             AppUser u = users.save(new AppUser(email, r.name().trim(), encoder.encode(r.password()), AppUser.Role.USER));
-            return new AuthResponse(token(u), UserDto.of(u));
+            return withSession(HttpStatus.CREATED, auth.start(u));
         }
 
         @PostMapping("/login")
-        AuthResponse login(@Valid @RequestBody LoginRequest r) {
+        ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest r) {
             AppUser u = users.findByEmail(r.email().trim().toLowerCase(Locale.ROOT))
                     .filter(x -> encoder.matches(r.password(), x.getPasswordHash()))
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or password"));
-            return new AuthResponse(token(u), UserDto.of(u));
+            return withSession(HttpStatus.OK, auth.start(u));
         }
 
-        private String token(AppUser u) {
-            Instant now = Instant.now();
-            var claims = JwtClaimsSet.builder().issuer("seatlock").subject(u.getId().toString())
-                    .claim("email", u.getEmail()).claim("name", u.getName()).claim("roles", List.of(u.getRole().name()))
-                    .issuedAt(now).expiresAt(now.plus(Duration.ofHours(12))).build();
-            return jwt.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
+        /** New access + refresh cookies from the refresh cookie (rotation). 401 + cleared cookies when the session is over. */
+        @PostMapping("/refresh")
+        ResponseEntity<AuthResponse> refresh(@CookieValue(name = COOKIE, required = false) String refresh) {
+            try {
+                return withSession(HttpStatus.OK, auth.rotate(refresh));
+            } catch (AuthService.InvalidRefreshException e) {
+                boolean race = e.getMessage().contains("another tab"); // keep the cookies: the other tab already replaced them
+                var res = ResponseEntity.status(HttpStatus.UNAUTHORIZED);
+                if (!race) res.header(HttpHeaders.SET_COOKIE, cookie(COOKIE, "", Duration.ZERO).toString(),
+                        cookie(ACCESS_COOKIE, "", Duration.ZERO).toString());
+                return res.build();
+            }
+        }
+
+        /** Who is signed in, from the cookie alone and without rotating it. Used by the frontend route guard. */
+        @GetMapping("/session")
+        ResponseEntity<UserDto> session(@CookieValue(name = COOKIE, required = false) String refresh) {
+            return auth.peek(refresh).map(u -> ResponseEntity.ok(UserDto.of(u)))
+                    .orElse(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
+        }
+
+        @PostMapping("/logout")
+        ResponseEntity<Void> logout(@CookieValue(name = COOKIE, required = false) String refresh) {
+            auth.logout(refresh);
+            return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, cookie(COOKIE, "", Duration.ZERO).toString(),
+                    cookie(ACCESS_COOKIE, "", Duration.ZERO).toString()).build();
+        }
+
+        /**
+         * Both tokens go out as httpOnly cookies; the browser app never handles a token. The access token is also
+         * in the body for non-browser clients (Swagger "Authorize", k6, scripts) that send it as a Bearer header.
+         */
+        private ResponseEntity<AuthResponse> withSession(HttpStatus status, AuthService.Session s) {
+            return ResponseEntity.status(status)
+                    .header(HttpHeaders.SET_COOKIE, cookie(COOKIE, s.refreshToken(), auth.refreshTtl()).toString(),
+                            cookie(ACCESS_COOKIE, s.accessToken(), auth.accessTtl()).toString())
+                    .body(new AuthResponse(s.accessToken(), UserDto.of(s.user())));
+        }
+
+        private ResponseCookie cookie(String name, String value, Duration maxAge) {
+            // httpOnly: invisible to JavaScript. SameSite=Lax: not sent on cross-site POST/DELETE.
+            // Path=/ so the frontend's route guard (same site via the /api proxy) sees them on page requests too.
+            return ResponseCookie.from(name, value).httpOnly(true).secure(secureCookie).sameSite("Lax")
+                    .path("/").maxAge(maxAge).build();
         }
     }
 
@@ -218,10 +267,12 @@ final class Controllers {
     static class AccountController {
         private final UserRepository users;
         private final PasswordEncoder encoder;
+        private final AuthService auth;
 
-        AccountController(UserRepository users, PasswordEncoder encoder) {
+        AccountController(UserRepository users, PasswordEncoder encoder, AuthService auth) {
             this.users = users;
             this.encoder = encoder;
+            this.auth = auth;
         }
 
         @GetMapping("/me")
@@ -230,12 +281,13 @@ final class Controllers {
         }
 
         /**
-         * Needs the current password. shortcut: tokens already issued stay valid until they expire (12 h);
-         * add a token version claim to revoke them on password change.
+         * Needs the current password. Signs out every other device (their refresh tokens are revoked);
+         * their access tokens lapse within the access-token lifetime (15 min by default).
          */
         @PostMapping("/password")
         @ResponseStatus(HttpStatus.NO_CONTENT)
-        void changePassword(@AuthenticationPrincipal Jwt user, @Valid @RequestBody ChangePasswordRequest r) {
+        void changePassword(@AuthenticationPrincipal Jwt user, @Valid @RequestBody ChangePasswordRequest r,
+                            @CookieValue(name = AuthController.COOKIE, required = false) String refresh) {
             AppUser u = users.findById(Long.valueOf(user.getSubject())).orElseThrow();
             if (!encoder.matches(r.currentPassword(), u.getPasswordHash()))
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Your current password is incorrect");
@@ -243,6 +295,7 @@ final class Controllers {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a password you haven't used here before");
             u.changePasswordHash(encoder.encode(r.newPassword()));
             users.save(u);
+            auth.endOtherSessions(u.getId(), refresh);
         }
     }
 
