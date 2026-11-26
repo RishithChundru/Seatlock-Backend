@@ -1,5 +1,6 @@
 package com.seatlock;
 
+import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.*;
 import com.seatlock.domain.Seat;
 import com.seatlock.service.BookingService;
@@ -40,8 +41,14 @@ class BookingConcurrencyTest {
         return available.stream().filter(s -> !held.contains(s.getId())).findFirst().orElseThrow();
     }
 
-    private Long demoUser() { return users.findByEmail("demo@seatlock.dev").orElseThrow().getId(); }
-    private Long adminUser() { return users.findByEmail("admin@seatlock.dev").orElseThrow().getId(); }
+    /** Tests create their own customers; synchronized because race() calls this from many threads. */
+    private synchronized Long user(String email) {
+        return users.findByEmail(email)
+                .orElseGet(() -> users.save(new AppUser(email, "Test User", "not-a-real-hash", AppUser.Role.USER)))
+                .getId();
+    }
+    private Long alice() { return user("alice@test.local"); }
+    private Long bob() { return user("bob@test.local"); }
 
     /** Runs task THREADS times, all released at the same instant; returns how many succeeded. */
     private int race(Callable<Void> task, Class<?>... expectedFailures) throws Exception {
@@ -74,7 +81,7 @@ class BookingConcurrencyTest {
         long before = bookingRepo.count();
 
         int ok = race(() -> {
-            bookings.book(demoUser(), eventId, List.of(seat.getId()), UUID.randomUUID().toString());
+            bookings.book(alice(), eventId, List.of(seat.getId()), UUID.randomUUID().toString());
             return null;
         }, ObjectOptimisticLockingFailureException.class, BookingService.SeatUnavailableException.class);
 
@@ -103,11 +110,11 @@ class BookingConcurrencyTest {
     void cannotBookASeatSomeoneElseIsHolding() {
         Seat seat = freeSeat();
         Long eventId = seat.getEvent().getId();
-        holds.hold(adminUser(), eventId, List.of(seat.getId()));
+        holds.hold(bob(), eventId, List.of(seat.getId()));
 
-        assertThatThrownBy(() -> bookings.book(demoUser(), eventId, List.of(seat.getId()), null))
+        assertThatThrownBy(() -> bookings.book(alice(), eventId, List.of(seat.getId()), null))
                 .isInstanceOf(BookingService.SeatUnavailableException.class);
-        bookings.book(adminUser(), eventId, List.of(seat.getId()), null); // the holder can
+        bookings.book(bob(), eventId, List.of(seat.getId()), null); // the holder can
     }
 
     @Test
@@ -115,8 +122,8 @@ class BookingConcurrencyTest {
         Seat seat = freeSeat();
         String key = UUID.randomUUID().toString();
 
-        var first = bookings.book(demoUser(), seat.getEvent().getId(), List.of(seat.getId()), key);
-        var retry = bookings.book(demoUser(), seat.getEvent().getId(), List.of(seat.getId()), key);
+        var first = bookings.book(alice(), seat.getEvent().getId(), List.of(seat.getId()), key);
+        var retry = bookings.book(alice(), seat.getEvent().getId(), List.of(seat.getId()), key);
 
         assertThat(retry.id()).isEqualTo(first.id());
     }
@@ -124,7 +131,7 @@ class BookingConcurrencyTest {
     @Test
     void ticketIsIssuedAsynchronouslyViaRabbitMq() throws Exception {
         Seat seat = freeSeat();
-        var booking = bookings.book(demoUser(), seat.getEvent().getId(), List.of(seat.getId()), null);
+        var booking = bookings.book(alice(), seat.getEvent().getId(), List.of(seat.getId()), null);
         assertThat(booking.ticketCode()).isNull(); // not issued in the request path
 
         String code = null;

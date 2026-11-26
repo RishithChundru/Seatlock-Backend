@@ -11,41 +11,60 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * Demo data on an empty database. Logins: demo@seatlock.dev / Demo@12345 (public demo account) and
- * admin@seatlock.dev with ADMIN_PASSWORD (defaults to Admin@12345 locally; always set it in production).
+ * Sample events plus one admin account on an empty database. The admin login comes from ADMIN_EMAIL and
+ * ADMIN_PASSWORD; no credentials live in the code. Customers register themselves through the UI.
  */
 @Component
 class DataSeeder implements CommandLineRunner {
+    private static final Logger log = LoggerFactory.getLogger(DataSeeder.class);
+
     private final UserRepository users;
     private final EventRepository eventRepo;
     private final SeatRepository seats;
     private final EventService events;
     private final BookingService bookings;
     private final PasswordEncoder encoder;
+    private final String adminEmail;
     private final String adminPassword;
 
     DataSeeder(UserRepository users, EventRepository eventRepo, SeatRepository seats, EventService events,
-               BookingService bookings, PasswordEncoder encoder, @Value("${app.seed.admin-password}") String adminPassword) {
+               BookingService bookings, PasswordEncoder encoder,
+               @Value("${app.seed.admin-email}") String adminEmail, @Value("${app.seed.admin-password}") String adminPassword) {
         this.users = users;
         this.eventRepo = eventRepo;
         this.seats = seats;
         this.events = events;
         this.bookings = bookings;
         this.encoder = encoder;
+        this.adminEmail = adminEmail.trim().toLowerCase(Locale.ROOT);
         this.adminPassword = adminPassword;
     }
 
     @Override
     public void run(String... args) {
         if (eventRepo.count() > 0) return;
-        AppUser admin = users.save(new AppUser("admin@seatlock.dev", "Admin", encoder.encode(adminPassword), AppUser.Role.ADMIN));
-        users.save(new AppUser("demo@seatlock.dev", "Demo User", encoder.encode("Demo@12345"), AppUser.Role.USER));
+        boolean generated = adminPassword == null || adminPassword.isBlank();
+        String password = generated ? randomPassword() : adminPassword;
+        if (generated) {
+            // Local convenience only; production always sets ADMIN_PASSWORD (render.yaml prompts for it).
+            log.warn("ADMIN_PASSWORD is not set. Generated admin password for {}: {} (set ADMIN_PASSWORD to choose your own)", adminEmail, password);
+        } else if (password.length() < 8) {
+            throw new IllegalStateException("ADMIN_PASSWORD must be at least 8 characters");
+        }
+        AppUser admin = users.findByEmail(adminEmail).orElseGet(() ->
+                users.save(new AppUser(adminEmail, "Admin", encoder.encode(password), AppUser.Role.ADMIN)));
 
         Instant day = Instant.now().truncatedTo(ChronoUnit.DAYS).plus(Duration.ofHours(14)); // 19:30 IST
         List<EventDto> created = List.of(
@@ -65,5 +84,11 @@ class DataSeeder implements CommandLineRunner {
             bookings.book(admin.getId(), e.id(), ids.subList(0, Math.min(10, ids.size())), null);
             if (ids.size() > 10) bookings.book(admin.getId(), e.id(), ids.subList(10, Math.min(20, ids.size())), null);
         }
+    }
+
+    private static String randomPassword() {
+        byte[] bytes = new byte[12];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 }
