@@ -24,6 +24,7 @@ import org.springframework.beans.factory.annotation.Value;
 
 @Service
 public class EventService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EventService.class);
     public static final String LIST_CACHE = "events";
     public static final String ITEM_CACHE = "event";
 
@@ -91,8 +92,16 @@ public class EventService {
         String type = sniffImageType(data);
         if (type == null) throw new IllegalArgumentException("Only JPEG, PNG or WebP images are allowed");
         String oldKey = e.getImageKey();
+        String newKey = null;
         if (objectStore.isEnabled()) {
-            e.setImageKey(objectStore.put(eventId, type, data)); // new key per upload: old URLs stay cacheable
+            try {
+                newKey = objectStore.put(eventId, type, data); // new key per upload: old URLs stay cacheable
+            } catch (RuntimeException ex) { // storage down or paused: keep uploads working via Postgres
+                log.warn("Object storage upload failed for event {}, storing the cover in Postgres: {}", eventId, ex.getMessage());
+            }
+        }
+        if (newKey != null) {
+            e.setImageKey(newKey);
             if (images.existsById(eventId)) images.deleteById(eventId); // moved out of Postgres
         } else {
             images.save(new EventImage(eventId, type, data));
