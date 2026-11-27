@@ -39,10 +39,13 @@ public class EventService {
     private final WaitlistRepository waitlist;
     private final S3ImageStore objectStore; // isEnabled() only when S3_BUCKET is configured
     private final String objectPublicUrl;
+    private final BookingService bookingService;
 
     public EventService(EventRepository events, SeatRepository seats, SeatHoldService holds, EventImageRepository images,
                         SeatRows seatRows, BookingRepository bookings, WaitlistRepository waitlist,
-                        S3ImageStore objectStore, @Value("${app.images.s3.public-url}") String objectPublicUrl) {
+                        S3ImageStore objectStore, @Value("${app.images.s3.public-url}") String objectPublicUrl,
+                        BookingService bookingService) {
+        this.bookingService = bookingService;
         this.objectStore = objectStore;
         this.objectPublicUrl = objectPublicUrl.replaceAll("/+$", "");
         this.events = events;
@@ -159,25 +162,20 @@ public class EventService {
         return toDto(e);
     }
 
-    /** Admin delete. Refused while anyone still holds a confirmed booking: cancel those first. */
+    /** Admin cancel + delete. Ticket holders are cancelled, refunded and emailed (see BookingService.cancelAllForEvent). */
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId"),
                       @CacheEvict(value = SeatRows.CACHE, key = "#eventId")})
     @Transactional
     public void delete(Long eventId) {
         Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
-        if (bookings.existsByEventIdAndStatus(eventId, Booking.Status.CONFIRMED))
-            throw new EventHasBookingsException();
+        bookingService.cancelAllForEvent(eventId);
         waitlist.deleteByEventId(eventId);
         seats.deleteByEventId(eventId);
-        bookings.deleteByEventId(eventId); // only cancelled ones are left
+        bookings.deleteByEventId(eventId); // all cancelled now
         if (images.existsById(eventId)) images.deleteById(eventId);
         String key = e.getImageKey();
         events.delete(e);
         objectStore.delete(key);
-    }
-
-    public static class EventHasBookingsException extends RuntimeException {
-        public EventHasBookingsException() { super("This event has confirmed bookings. Cancel them before deleting it."); }
     }
 
     private EventDto toDto(Event e) {

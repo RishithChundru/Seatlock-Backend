@@ -25,7 +25,8 @@ public class BookingService {
     public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds,
                                    String email, String eventTitle, List<String> seatLabels) {}
     public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds,
-                                   String email, String eventTitle, List<String> seatLabels, int refundCents) {}
+                                   String email, String eventTitle, List<String> seatLabels, int refundCents,
+                                   boolean eventCancelled) {}
 
     private final BookingRepository bookings;
     private final SeatRepository seats;
@@ -101,8 +102,24 @@ public class BookingService {
         List<Seat> freed = booking.cancel();
         seats.saveAllAndFlush(freed);
         publisher.publishEvent(new BookingCancelled(booking.getId(), booking.getEvent().getId(), freed.stream().map(Seat::getId).toList(),
-                booking.getUser().getEmail(), booking.getEvent().getTitle(), booking.seatLabels(), booking.getTotalCents()));
+                booking.getUser().getEmail(), booking.getEvent().getTitle(), booking.seatLabels(), booking.getTotalCents(), false));
         return BookingDto.of(booking);
+    }
+
+    /**
+     * The organiser called the event off: every confirmed booking is cancelled in the caller's transaction.
+     * After commit each holder is refunded (if they paid) and emailed; freed seats don't go to the waitlist.
+     */
+    @Transactional
+    public int cancelAllForEvent(Long eventId) {
+        List<Booking> confirmed = bookings.findByEventIdAndStatus(eventId, Booking.Status.CONFIRMED);
+        for (Booking b : confirmed) {
+            List<Seat> freed = b.cancel();
+            seats.saveAll(freed);
+            publisher.publishEvent(new BookingCancelled(b.getId(), eventId, freed.stream().map(Seat::getId).toList(),
+                    b.getUser().getEmail(), b.getEvent().getTitle(), b.seatLabels(), b.getTotalCents(), true));
+        }
+        return confirmed.size();
     }
 
     /**

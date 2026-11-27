@@ -46,7 +46,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "We're busy right now. Please try again in a moment."));
     }
 
-    @ExceptionHandler({WaitlistService.SeatsStillAvailableException.class, EventService.EventHasBookingsException.class,
+    @ExceptionHandler({WaitlistService.SeatsStillAvailableException.class,
                        BookingService.CheckInRefusedException.class, com.seatlock.service.SeatHoldService.HoldExpiredException.class,
                        com.seatlock.service.PaymentService.PaymentRefundedException.class})
     ProblemDetail seatsAvailable(RuntimeException e) {

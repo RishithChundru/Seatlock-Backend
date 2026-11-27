@@ -60,6 +60,7 @@ public final class Repositories {
         List<Booking> findTop100ByTicketIssuedAtIsNullAndCreatedAtBefore(Instant cutoff);
         Optional<Booking> findByTicketCode(String ticketCode);
         boolean existsByEventIdAndStatus(Long eventId, Booking.Status status);
+        List<Booking> findByEventIdAndStatus(Long eventId, Booking.Status status);
         void deleteByEventId(Long eventId);
 
         /**

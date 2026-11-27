@@ -204,7 +204,7 @@ With `RAZORPAY_KEY_ID` set, seats are booked only after a proven payment:
 2. The browser opens Razorpay Checkout. On success it sends the signed result to `POST /api/payments/verify`; the server checks the HMAC-SHA256 signature of `order_id|payment_id` with the key secret before booking.
 3. Razorpay also calls `POST /api/payments/webhook` (signed over the raw body with the webhook secret), so the booking is made even if the tab closed after paying.
 4. Verify and webhook can arrive in any order, or together: the booking uses the order id as its idempotency key, so exactly one booking is made.
-5. If the seats were lost while paying (hold expired and someone else bought them), the payment is **refunded in full** automatically. Cancelling a paid booking refunds it too.
+5. If the seats were lost while paying (hold expired and someone else bought them), the payment is **refunded in full** automatically. Cancelling a paid booking refunds it too, and the cancellation email says the refund has started.
 
 Razorpay calls never run inside a DB transaction, and payment status only moves forward through conditional `UPDATE`s, so a refund is issued once. Without keys, checkout books instantly as before. Tested against a fake Razorpay API in `PaymentFlowTest`.
 
@@ -214,7 +214,7 @@ Razorpay calls never run inside a DB transaction, and payment status only moves 
 - **Search:** `GET /api/events/search` filters upcoming events by text, category, city (parsed from "Place, City"), date window and max price, with pagination and the available cities and categories for the filter UI. It runs in memory over the cached event list. That's fine for hundreds of events, and the code notes when to move it to SQL.
 - **Gate check-in:** tickets carry a QR of their code. `POST /api/admin/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
 - **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
-- **Admin:** delete events (refused while confirmed bookings exist), remove covers. **Account:** change password (needs the current one).
+- **Admin:** cancel events: every ticket holder is cancelled, refunded if they paid, and emailed; the event is then removed, remove covers. **Account:** change password (needs the current one).
 
 ### Sessions: both tokens in httpOnly cookies
 

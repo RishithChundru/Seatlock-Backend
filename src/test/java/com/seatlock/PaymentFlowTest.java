@@ -138,7 +138,7 @@ class PaymentFlowTest {
 
         // Cancelling a paid booking refunds it.
         bookings.cancel(u, booking.id());
-        assertThat(refunds).contains("pay_1");
+        eventually(() -> assertThat(refunds).contains("pay_1")); // refunds run on a worker thread after commit
         assertThat(paymentRows.findByOrderId(order.orderId()).orElseThrow().getStatus()).isEqualTo(Payment.Status.REFUNDED);
     }
 
@@ -173,6 +173,30 @@ class PaymentFlowTest {
         assertThat(refunds).contains("pay_3");
         assertThat(bookings.forUser(alice)).isEmpty();
         assertThat(paymentRows.findByOrderId(order.orderId()).orElseThrow().getStatus()).isEqualTo(Payment.Status.REFUNDED);
+    }
+
+    @Test
+    void cancellingAnEventRefundsEveryPaidTicket() throws Exception {
+        Long u = user();
+        Setup s = heldSeats(u);
+        var order = payments.checkout(u, s.eventId(), s.seatIds(), null);
+        payments.verify(u, order.orderId(), "pay_4", hmac(KEY_SECRET, order.orderId() + "|pay_4"));
+
+        events.delete(s.eventId());
+        eventually(() -> assertThat(refunds).contains("pay_4"));
+        assertThat(paymentRows.findByOrderId(order.orderId()).orElseThrow().getStatus()).isEqualTo(Payment.Status.REFUNDED);
+    }
+
+    static void eventually(Runnable check) throws InterruptedException {
+        for (int i = 0; ; i++) {
+            try {
+                check.run();
+                return;
+            } catch (AssertionError e) {
+                if (i >= 50) throw e;
+                Thread.sleep(100);
+            }
+        }
     }
 
     @Test
