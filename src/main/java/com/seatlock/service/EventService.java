@@ -214,6 +214,6 @@ public class EventService {
         return new EventDto(e.getId(), e.getTitle(), e.getVenue(), e.getCategory(), e.getStartsAt(), e.getPriceCents(),
                 seats.countByEventId(e.getId()), seats.countByEventIdAndStatus(e.getId(), Seat.Status.AVAILABLE),
                 e.getDescription(), imageUrl, e.city(), tiers,
-                e.getOrganizerId() == null ? null : organizers.findById(e.getOrganizerId()).map(HostDto::of).orElse(null));
+                e.getOrganizerId() == null ? null : organizers.findById(e.getOrganizerId()).map(o -> HostDto.of(o, OrganizerService.logoUrl(o, objectPublicUrl))).orElse(null));
     }
 }

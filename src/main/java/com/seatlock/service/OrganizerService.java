@@ -6,6 +6,9 @@ import com.seatlock.api.Dtos.StaffDto;
 import com.seatlock.api.Dtos.UserDto;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Organizer;
+import com.seatlock.domain.OrganizerLogo;
+import com.seatlock.domain.Repositories.OrganizerLogoRepository;
+import org.springframework.beans.factory.annotation.Value;
 import com.seatlock.domain.Repositories.OrganizerRepository;
 import com.seatlock.domain.Repositories.UserRepository;
 import org.springframework.cache.annotation.CacheEvict;
@@ -28,11 +31,22 @@ public class OrganizerService {
     /** An email to send after the transaction commits (see NoticeMailer). path is relative to the frontend. */
     public record Notice(String to, String subject, String headline, String text, String cta, String path) {}
 
+    public static final int MAX_LOGO_BYTES = 1024 * 1024;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrganizerService.class);
+
     private final OrganizerRepository organizers;
     private final UserRepository users;
     private final ApplicationEventPublisher publisher;
+    private final OrganizerLogoRepository logos;
+    private final S3ImageStore objectStore;
+    private final String objectPublicUrl;
 
-    public OrganizerService(OrganizerRepository organizers, UserRepository users, ApplicationEventPublisher publisher) {
+    public OrganizerService(OrganizerRepository organizers, UserRepository users, ApplicationEventPublisher publisher,
+                            OrganizerLogoRepository logos, S3ImageStore objectStore,
+                            @Value("${app.images.s3.public-url}") String objectPublicUrl) {
+        this.logos = logos;
+        this.objectStore = objectStore;
+        this.objectPublicUrl = objectPublicUrl.replaceAll("/+$", "");
         this.organizers = organizers;
         this.users = users;
         this.publisher = publisher;
@@ -204,6 +218,67 @@ public class OrganizerService {
         u.setStaffOf(null);
     }
 
+    /**
+     * Logo upload (optional, any time except while suspended, also while pending). Not @Transactional: with
+     * object storage the upload is network I/O, which must not hold a pooled DB connection.
+     */
+    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
+                      @CacheEvict(value = EventService.ITEM_CACHE, allEntries = true)}) // "Hosted by" shows it
+    public OrganizerDto setLogo(Long userId, byte[] data) {
+        Organizer o = editable(userId);
+        if (data.length == 0 || data.length > MAX_LOGO_BYTES) throw new IllegalArgumentException("Logo must be under 1 MB");
+        String type = EventService.sniffImageType(data); // magic bytes, never the client's Content-Type
+        if (type == null) throw new IllegalArgumentException("Only JPEG, PNG or WebP images are allowed");
+        String oldKey = o.getLogoKey();
+        String newKey = null;
+        if (objectStore.isEnabled()) {
+            try {
+                newKey = objectStore.putIn("organizers/" + o.getId(), type, data);
+            } catch (RuntimeException ex) { // storage down or paused: keep uploads working via Postgres (as for covers)
+                log.warn("Object storage upload failed for organizer {} logo, storing it in Postgres: {}", o.getId(), ex.getMessage());
+            }
+        }
+        if (newKey != null) {
+            o.logoChanged(newKey);
+            if (logos.existsById(o.getId())) logos.deleteById(o.getId());
+        } else {
+            logos.save(new OrganizerLogo(o.getId(), type, data));
+            o.logoChanged(null);
+        }
+        organizers.save(o);
+        if (oldKey != null && !oldKey.equals(o.getLogoKey())) objectStore.delete(oldKey);
+        return dto(o, users.findById(userId).orElseThrow());
+    }
+
+    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
+                      @CacheEvict(value = EventService.ITEM_CACHE, allEntries = true)})
+    public OrganizerDto removeLogo(Long userId) {
+        Organizer o = editable(userId);
+        String key = o.getLogoKey();
+        if (logos.existsById(o.getId())) logos.deleteById(o.getId());
+        o.logoRemoved();
+        organizers.save(o);
+        objectStore.delete(key); // after the DB change; a leftover object is harmless
+        return dto(o, users.findById(userId).orElseThrow());
+    }
+
+    @Transactional(readOnly = true)
+    public OrganizerLogo logo(Long organizerId) {
+        return logos.findById(organizerId).orElseThrow(() -> new NoSuchElementException("No logo"));
+    }
+
+    /** Public object-storage URL, a versioned API URL (Postgres-stored), or null when there's no logo. */
+    public static String logoUrl(Organizer o, String objectPublicUrl) {
+        if (o.getLogoKey() != null) return objectPublicUrl + "/" + o.getLogoKey();
+        return o.getLogoUpdatedAt() == null ? null : "/api/organizers/" + o.getId() + "/logo?v=" + o.getLogoUpdatedAt().toEpochMilli();
+    }
+
+    private Organizer editable(Long userId) {
+        Organizer o = organizers.findByUserId(userId).orElseThrow(() -> new NoSuchElementException("Organizer not found"));
+        if (o.getStatus() == Organizer.Status.SUSPENDED) throw new IllegalArgumentException("This organizer account is suspended");
+        return o;
+    }
+
     private Organizer activeOf(Long ownerUserId) {
         return organizers.findByUserId(ownerUserId).filter(Organizer::isApproved)
                 .orElseThrow(() -> new Access.ForbiddenException("Your organizer account isn't active"));
@@ -219,8 +294,9 @@ public class OrganizerService {
 
     private static String blankToNull(String s) { return s == null || s.isBlank() ? null : s.trim(); }
 
-    private static OrganizerDto dto(Organizer o, AppUser u) {
+    private OrganizerDto dto(Organizer o, AppUser u) {
         return new OrganizerDto(o.getId(), o.getName(), o.getAbout(), o.getCity(), o.getContactEmail(), o.getContactPhone(),
-                o.getWebsite(), o.getStatus().name(), o.getReviewNote(), o.getCreatedAt(), o.getReviewedAt(), u.getName(), u.getEmail());
+                o.getWebsite(), o.getStatus().name(), o.getReviewNote(), o.getCreatedAt(), o.getReviewedAt(), u.getName(), u.getEmail(),
+                logoUrl(o, objectPublicUrl));
     }
 }

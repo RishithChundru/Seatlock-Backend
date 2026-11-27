@@ -35,6 +35,8 @@ public final class Repositories {
 
     public interface EventImageRepository extends JpaRepository<EventImage, Long> {}
 
+    public interface OrganizerLogoRepository extends JpaRepository<OrganizerLogo, Long> {}
+
     public interface SeatRepository extends JpaRepository<Seat, Long> {
         List<Seat> findByEventIdOrderByRowLabelAscSeatNumberAsc(Long eventId);
         long countByEventId(Long eventId);

@@ -208,7 +208,7 @@ Seatlock is a marketplace: outside organizers host their own events.
 | `STAFF` | Only the check-in scanner, only for their organizer's events |
 | `USER` | Book, pay, cancel, share |
 
-1. **Sign up as an organizer** at `/organizer/signup`, separate from customer sign-up: a 4-step form (account; organisation name, city, about; public contact email, Indian mobile number (+91) and website; review and accept the terms). It creates an `ORGANIZER` account and its application together. The profile is shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive). Customer accounts can't become organizers.
+1. **Sign up as an organizer** at `/organizer/signup`, separate from customer sign-up: a 4-step form (account; organisation name, optional logo, city, about; public contact email, Indian mobile number (+91) and website; review and accept the terms). It creates an `ORGANIZER` account and its application together. The profile is shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive). Customer accounts can't become organizers.
 2. **Pending = read-only:** the organizer can sign in and look around their dashboard, but creating events, adding staff and check-in are blocked (in the API, not just the UI) until approved. Every super admin gets a "New organizer request" email linking to the review queue.
 3. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed; approval sends "You're approved".
 4. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
@@ -296,6 +296,8 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
 | POST | `/api/auth/register-organizer` `{account, organizer}`: organizer account + pending application | public |
 | GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
+| POST / DELETE | `/api/organizer/me/logo` (multipart `file`; JPEG/PNG/WebP, 1 MB, magic-byte checked; object storage or Postgres like covers) | ORGANIZER |
+| GET | `/api/organizers/{id}/logo` (versioned URL, cached for a year) | public |
 | GET / POST / DELETE | `/api/organizer/staff[/{id}]`: gate staff | ORGANIZER |
 | GET | `/api/admin/organizers?status=` | ADMIN |
 | POST | `/api/admin/organizers/{id}/approve` · `/reject {note}` · `/suspend {note?}` · `/reinstate` | ADMIN |

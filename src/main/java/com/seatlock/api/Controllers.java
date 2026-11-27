@@ -381,6 +381,15 @@ final class Controllers {
             return organizers.apply(Long.valueOf(user.getSubject()), r);
         }
 
+        /** Optional logo (JPEG/PNG/WebP, 1 MB). Allowed while pending too, so it can be part of sign-up. */
+        @PostMapping(value = "/me/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+        OrganizerDto uploadLogo(@AuthenticationPrincipal Jwt user, @RequestParam("file") MultipartFile file) throws IOException {
+            return organizers.setLogo(Long.valueOf(user.getSubject()), file.getBytes());
+        }
+
+        @DeleteMapping("/me/logo")
+        OrganizerDto removeLogo(@AuthenticationPrincipal Jwt user) { return organizers.removeLogo(Long.valueOf(user.getSubject())); }
+
         @GetMapping("/staff")
         List<StaffDto> staff(@AuthenticationPrincipal Jwt user) { return organizers.staff(Long.valueOf(user.getSubject())); }
 
@@ -394,6 +403,23 @@ final class Controllers {
         @ResponseStatus(HttpStatus.NO_CONTENT)
         void removeStaff(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
             organizers.removeStaff(Long.valueOf(user.getSubject()), id);
+        }
+    }
+
+    /** Public: logos stored in Postgres (object-storage logos are served by the bucket). The URL is versioned. */
+    @RestController
+    @RequestMapping("/api/organizers")
+    static class OrganizerLogoController {
+        private final OrganizerService organizers;
+
+        OrganizerLogoController(OrganizerService organizers) { this.organizers = organizers; }
+
+        @GetMapping("/{id}/logo")
+        ResponseEntity<byte[]> logo(@PathVariable Long id) {
+            var logo = organizers.logo(id);
+            return ResponseEntity.ok().contentType(MediaType.parseMediaType(logo.getContentType()))
+                    .cacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable())
+                    .body(logo.getData());
         }
     }
 

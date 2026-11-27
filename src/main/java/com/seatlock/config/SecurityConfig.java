@@ -59,6 +59,7 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/prometheus").access((auth, ctx) ->
                         new AuthorizationDecision(metricsAllowed(ctx.getRequest().getHeader(HttpHeaders.AUTHORIZATION), metricsToken)))
                 .requestMatchers(HttpMethod.GET, "/api/events/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/organizers/*/logo").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/tickets/*").permitAll() // shared ticket page, unguessable token
                 // Organizers manage only their own events: Access checks ownership in the service layer.
                 .requestMatchers(HttpMethod.POST, "/api/events", "/api/events/*/image").hasAnyRole("ADMIN", "ORGANIZER")

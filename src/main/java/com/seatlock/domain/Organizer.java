@@ -33,6 +33,10 @@ public class Organizer {
     @Column(nullable = false)
     private Instant createdAt = Instant.now();
     private Instant reviewedAt;
+    /** Object-storage key of the logo, or null (then it's in organizer_logos, or there is none). */
+    @Column(length = 200)
+    private String logoKey;
+    private Instant logoUpdatedAt;
 
     protected Organizer() {}
 
@@ -65,6 +69,18 @@ public class Organizer {
         this.reviewedAt = Instant.now();
     }
 
+    public void logoChanged(String key) {
+        this.logoKey = key;
+        this.logoUpdatedAt = Instant.now(); // versions the URL, so caches can keep it forever
+    }
+
+    public void logoRemoved() {
+        this.logoKey = null;
+        this.logoUpdatedAt = null;
+    }
+
+    public String getLogoKey() { return logoKey; }
+    public Instant getLogoUpdatedAt() { return logoUpdatedAt; }
     public boolean isApproved() { return status == Status.APPROVED; }
     public Long getId() { return id; }
     public Long getUserId() { return userId; }

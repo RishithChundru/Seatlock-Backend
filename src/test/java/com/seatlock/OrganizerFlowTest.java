@@ -172,6 +172,30 @@ class OrganizerFlowTest {
     }
 
     @Test
+    void anOrganizerCanAddReplaceAndRemoveALogoShownOnTheirEvents() {
+        AppUser host = organizers.signup("logo-" + run + "@test.local", "L", "x", profile("Logo Co " + run));
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 'I', 'H', 'D', 'R'};
+
+        // Pending organizers can add one (it's part of sign-up); only real images, at most 1 MB.
+        var withLogo = organizers.setLogo(host.getId(), png);
+        assertThat(withLogo.logoUrl()).startsWith("/api/organizers/" + withLogo.id() + "/logo?v=");
+        assertThat(organizers.logo(withLogo.id()).getData()).isEqualTo(png);
+        assertThatThrownBy(() -> organizers.setLogo(host.getId(), "<svg onload=alert(1)>".getBytes()))
+                .hasMessageContaining("JPEG, PNG or WebP");
+        assertThatThrownBy(() -> organizers.setLogo(host.getId(), new byte[OrganizerService.MAX_LOGO_BYTES + 1]))
+                .hasMessageContaining("1 MB");
+
+        // It appears in "Hosted by" on their events.
+        organizers.approve(withLogo.id());
+        EventDto ev = event(access.organizerForNewEvent(host.getId()));
+        assertThat(events.get(ev.id()).host().logoUrl()).isEqualTo(organizers.mine(host.getId()).orElseThrow().logoUrl());
+
+        assertThat(organizers.removeLogo(host.getId()).logoUrl()).isNull();
+        assertThatThrownBy(() -> organizers.logo(withLogo.id())).isInstanceOf(NoSuchElementException.class);
+        assertThat(events.get(ev.id()).host().logoUrl()).as("event cache evicted").isNull();
+    }
+
+    @Test
     void customersCantTurnTheirAccountIntoAnOrganizer() {
         AppUser customer = user("customer", AppUser.Role.USER);
         assertThatThrownBy(() -> organizers.apply(customer.getId(), profile("Sneaky " + run))).hasMessageContaining("Customer accounts");

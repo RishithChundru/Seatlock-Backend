@@ -30,9 +30,10 @@ public final class Dtos {
 
     /** "Hosted by" on an event: the organizer's public profile. Null host = hosted by Seatlock. */
     public record HostDto(Long id, String name, String about, String city, String contactEmail, String contactPhone,
-                          String website) implements Serializable {
-        public static HostDto of(Organizer o) {
-            return new HostDto(o.getId(), o.getName(), o.getAbout(), o.getCity(), o.getContactEmail(), o.getContactPhone(), o.getWebsite());
+                          String website, String logoUrl) implements Serializable {
+        public static HostDto of(Organizer o, String logoUrl) {
+            return new HostDto(o.getId(), o.getName(), o.getAbout(), o.getCity(), o.getContactEmail(), o.getContactPhone(),
+                    o.getWebsite(), logoUrl);
         }
     }
 
@@ -49,7 +50,7 @@ public final class Dtos {
     /** status: PENDING, APPROVED, REJECTED or SUSPENDED. reviewNote: why it was rejected or suspended. */
     public record OrganizerDto(Long id, String name, String about, String city, String contactEmail, String contactPhone,
                                String website, String status, String reviewNote, Instant createdAt, Instant reviewedAt,
-                               String accountName, String accountEmail) {}
+                               String accountName, String accountEmail, String logoUrl) {}
 
     public record RejectRequest(@NotBlank @Size(max = 300) String note) {}
 
