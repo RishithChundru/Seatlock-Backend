@@ -308,7 +308,7 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | POST | `/api/events` | ADMIN |
 | POST | `/api/events/{id}/image` (multipart `file`, JPEG/PNG/WebP ≤ 2 MB) | ADMIN |
 | GET | `/api/events/{id}/image?v=…` (immutable, cached 1 year) | public |
-| POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min | USER |
+| POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min. Holds, checkout, bookings and waitlist joins are customer-only: admin, organizer and staff tokens get 403 | USER |
 | DELETE | `/api/holds/{seatId}` | USER |
 | GET | `/api/events/{id}/stream` (Server-Sent Events: `seats` on every change) | public |
 | POST | `/api/payments/checkout` (`Idempotency-Key` optional): a booking, or a Razorpay order to pay | USER |
