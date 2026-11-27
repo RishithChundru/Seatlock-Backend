@@ -3,6 +3,9 @@ package com.seatlock.service;
 import com.seatlock.api.Dtos.BookingDto;
 import com.seatlock.api.Dtos.CheckInResult;
 import com.seatlock.api.Dtos.SharedTicket;
+import com.seatlock.api.Dtos.Insights;
+import com.seatlock.api.Dtos.RecentBooking;
+import com.seatlock.api.Dtos.WeekPoint;
 import java.util.Locale;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
@@ -186,6 +189,36 @@ public class BookingService {
         return new SharedTicket(e.getId(), e.getTitle(), e.getVenue(), e.getStartsAt(), b.seatLabels(),
                 b.isCancelled() || b.getCheckedInAt() != null ? null : b.getTicketCode(), // used or void: nothing to scan
                 b.getStatus().name(), b.getCheckedInAt(), firstName);
+    }
+
+    static final java.time.ZoneId IST = java.time.ZoneId.of("Asia/Kolkata");
+    static final int WEEKS = 8;
+
+    /** Sales per week (last 8, oldest first) and the 6 latest bookings, for the events a dashboard user may see. */
+    @Transactional(readOnly = true)
+    public Insights insights(List<Event> visible) {
+        java.time.LocalDate thisWeek = java.time.LocalDate.now(IST).with(java.time.DayOfWeek.MONDAY);
+        java.time.LocalDate first = thisWeek.minusWeeks(WEEKS - 1);
+        long[] count = new long[WEEKS];
+        long[] revenue = new long[WEEKS];
+        List<Long> ids = visible.stream().map(Event::getId).toList();
+        List<RecentBooking> recent = List.of();
+        if (!ids.isEmpty()) {
+            for (Object[] row : bookings.salesSince(ids, first.atStartOfDay(IST).toInstant())) {
+                java.time.LocalDate day = ((Instant) row[0]).atZone(IST).toLocalDate();
+                int week = (int) java.time.temporal.ChronoUnit.WEEKS.between(first, day.with(java.time.DayOfWeek.MONDAY));
+                if (week < 0 || week >= WEEKS) continue;
+                count[week]++;
+                revenue[week] += ((Number) row[1]).longValue();
+            }
+            recent = bookings.latestFor(ids, org.springframework.data.domain.PageRequest.of(0, 6)).stream()
+                    .map(b -> new RecentBooking(b.getId(), b.getEvent().getId(), b.getEvent().getTitle(), b.seatLabels(),
+                            b.getUser().getName(), b.getTotalCents(), b.getStatus().name(), b.getCreatedAt(), b.getCheckedInAt() != null))
+                    .toList();
+        }
+        List<WeekPoint> weeks = new java.util.ArrayList<>();
+        for (int i = 0; i < WEEKS; i++) weeks.add(new WeekPoint(first.plusWeeks(i), count[i], revenue[i]));
+        return new Insights(weeks, recent);
     }
 
     @Transactional(readOnly = true)

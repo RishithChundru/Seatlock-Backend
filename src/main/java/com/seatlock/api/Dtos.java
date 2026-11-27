@@ -6,6 +6,7 @@ import jakarta.validation.constraints.*;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 public final class Dtos {
@@ -67,6 +68,15 @@ public final class Dtos {
 
     public record AcceptInviteRequest(@NotBlank @Size(max = 100) String token, @NotBlank @Size(max = 60) String name,
                                       @NotBlank @Size(min = 8, max = 72) String password) {}
+
+    /** Dashboard chart point: confirmed bookings and revenue in the week starting weekStart (Monday, IST). */
+    public record WeekPoint(LocalDate weekStart, long bookings, long revenueCents) {}
+
+    public record RecentBooking(Long id, Long eventId, String eventTitle, List<String> seats, String customer, int totalCents,
+                                String status, Instant createdAt, boolean checkedIn) {}
+
+    /** Dashboard charts and tables: the last 8 weeks (oldest first) and the latest bookings. */
+    public record Insights(List<WeekPoint> weeks, List<RecentBooking> recent) {}
 
     /** Dashboard row: the event plus its sales so far (confirmed bookings only). */
     public record ManagedEvent(EventDto event, long bookings, long revenueCents, long checkedIn) {}

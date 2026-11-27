@@ -294,6 +294,7 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
 | POST | `/api/manage/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` (only tickets the scanner may admit) | ADMIN, ORGANIZER, STAFF |
 | GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
+| GET | `/api/manage/insights`: bookings and revenue per week (last 8 weeks, IST) and the latest bookings, across the events this user manages | ADMIN, ORGANIZER, STAFF |
 | POST | `/api/auth/register-organizer` `{account, organizer}`: organizer account + pending application | public |
 | GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
 | POST / DELETE | `/api/organizer/me/logo` (multipart `file`; JPEG/PNG/WebP, 1 MB, magic-byte checked; object storage or Postgres like covers) | ORGANIZER |

@@ -138,6 +138,17 @@ class OrganizerFlowTest {
         assertThatThrownBy(() -> bookings.checkIn(other, null, host.getId())).hasMessageContaining("isn't for one of your events");
         assertThat(bookings.checkIn(other, null, superAdmin.getId()).result()).isEqualTo("ADMITTED");
 
+        // Dashboard chart: 8 weeks, this week holds the booking; latest bookings show who booked what.
+        var insights = bookings.insights(access.visibleEvents(host.getId()));
+        assertThat(insights.weeks()).hasSize(8);
+        assertThat(insights.weeks().getLast().bookings()).isEqualTo(1);
+        assertThat(insights.weeks().getLast().revenueCents()).isEqualTo(50000);
+        assertThat(insights.recent()).singleElement().satisfies(r -> {
+            assertThat(r.eventTitle()).isEqualTo(mine.title());
+            assertThat(r.customer()).isEqualTo("fan");
+            assertThat(r.checkedIn()).isTrue();
+        });
+
         // Dashboard numbers count confirmed bookings and check-ins.
         var row = events.manage(access.visibleEvents(host.getId())).getFirst();
         assertThat(row.bookings()).isEqualTo(1);
