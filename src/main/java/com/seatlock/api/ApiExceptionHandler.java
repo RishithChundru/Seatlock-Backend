@@ -47,9 +47,15 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @ExceptionHandler({WaitlistService.SeatsStillAvailableException.class, EventService.EventHasBookingsException.class,
-                       BookingService.CheckInRefusedException.class})
+                       BookingService.CheckInRefusedException.class, com.seatlock.service.SeatHoldService.HoldExpiredException.class,
+                       com.seatlock.service.PaymentService.PaymentRefundedException.class})
     ProblemDetail seatsAvailable(RuntimeException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    @ExceptionHandler(com.seatlock.service.RazorpayClient.ProviderException.class)
+    ProblemDetail paymentProvider(RuntimeException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY, e.getMessage());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

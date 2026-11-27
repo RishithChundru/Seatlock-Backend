@@ -150,6 +150,23 @@ Without this, covers are stored in Postgres (fine for a demo, but they eat into 
 
 New uploads go to R2; existing covers keep working from Postgres until they're replaced.
 
+## Payments with Razorpay (test mode)
+
+Free: test mode needs no KYC and never moves real money. Without these variables, checkout books instantly (no payment step).
+
+1. Sign up at razorpay.com (mobile number + OTP). You can skip the business/KYC details for now.
+2. Dashboard: make sure the toggle at the top says **Test Mode**.
+3. **Account & Settings → API Keys → Generate Key**. Copy the **Key ID** (`rzp_test_…`) and **Key Secret** (shown only once).
+4. Render → **Environment**, add: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` (as secrets).
+5. **Webhook**: Razorpay → **Account & Settings → Webhooks → Add New Webhook**:
+   - URL: `https://<your-render-url>/api/payments/webhook`
+   - Secret: any long random string you make up (`openssl rand -hex 24`)
+   - Active events: `payment.captured`
+   Then add the same string to Render as `RAZORPAY_WEBHOOK_SECRET`.
+6. Payments must be **auto-captured** (the default for test accounts; check **Account & Settings → Payment Capture**). Refunds only work on captured payments.
+
+Test payment: card `4111 1111 1111 1111`, any future expiry, any CVV, any OTP; or UPI `success@razorpay`. Locally, put the same two keys in `.env`; the webhook can't reach localhost, but the browser's verify call books on its own.
+
 ## Metrics (optional)
 
 `/actuator/prometheus` needs HTTP Basic with user `prometheus` and the `METRICS_TOKEN` value from Render → Environment. Point any Prometheus (for example Grafana Cloud's free tier) at it; the dashboard JSON is in `observability/grafana/dashboards`.

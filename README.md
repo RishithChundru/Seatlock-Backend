@@ -120,9 +120,11 @@ All settings are environment variables. Locally they come from `.env`; in produc
 | `MAIL_FROM` | optional | `Seatlock <tickets@seatlock.local>` | Sender address |
 | `FRONTEND_URL` | ✅ for email links | `http://localhost:3000` | Where links in emails point |
 | `DB_POOL_SIZE` | optional | `10` | Max DB connections per instance (hot reads use Redis, so this backs writes) |
-| `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | optional | `15m` / `14d` | Session lifetimes |
+| `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | optional | `1h` / `7d` | Session lifetimes |
 | `COOKIE_SECURE` | ✅ `true` | `false` | Auth cookies only over HTTPS |
 | `METRICS_TOKEN` | optional | *(empty = closed)* | Password for `/actuator/prometheus` (user `prometheus`) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | optional | *(empty = payments off)* | Razorpay API keys (`rzp_test_…` for test mode); see [DEPLOY.md](DEPLOY.md#payments-with-razorpay-test-mode) |
+| `RAZORPAY_WEBHOOK_SECRET` | with Razorpay in prod | *(empty = webhooks rejected)* | Secret you choose when adding the webhook in Razorpay |
 | `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_URL`, `S3_REGION` | optional | *(empty = covers in Postgres)* | Store covers in Cloudflare R2 / S3; see [DEPLOY.md](DEPLOY.md#cover-images-on-cloudflare-r2-optional) |
 | `PORT` | set by host | `8080` | HTTP port |
 
@@ -194,6 +196,18 @@ docker run --rm -i -v "$PWD/load:/scripts" \
   grafana/k6 run /scripts/seatlock.js
 ```
 
+### Payments (Razorpay)
+
+With `RAZORPAY_KEY_ID` set, seats are booked only after a proven payment:
+
+1. `POST /api/payments/checkout` checks the user still holds every seat, extends those holds to 15 minutes, prices the order **on the server** from the seat tiers, and creates a Razorpay order.
+2. The browser opens Razorpay Checkout. On success it sends the signed result to `POST /api/payments/verify`; the server checks the HMAC-SHA256 signature of `order_id|payment_id` with the key secret before booking.
+3. Razorpay also calls `POST /api/payments/webhook` (signed over the raw body with the webhook secret), so the booking is made even if the tab closed after paying.
+4. Verify and webhook can arrive in any order, or together: the booking uses the order id as its idempotency key, so exactly one booking is made.
+5. If the seats were lost while paying (hold expired and someone else bought them), the payment is **refunded in full** automatically. Cancelling a paid booking refunds it too.
+
+Razorpay calls never run inside a DB transaction, and payment status only moves forward through conditional `UPDATE`s, so a refund is issued once. Without keys, checkout books instantly as before. Tested against a fake Razorpay API in `PaymentFlowTest`.
+
 ### Seat tiers, search, check-in, email
 
 - **Tiers:** events can have VIP and Premium front rows (default prices 2× and 1.5× the standard price, or set your own). Each seat stores its tier, and the event stores the prices. Booking totals are summed per seat, and seat maps show tier and price, served from the same Redis cache as the rest of the map.
@@ -204,7 +218,7 @@ docker run --rm -i -v "$PWD/load:/scripts" \
 
 ### Sessions: both tokens in httpOnly cookies
 
-Login sets two cookies, both `HttpOnly`, `SameSite=Lax`, and `Secure` in production: `sl_access` (15-minute JWT) and `sl_refresh` (14-day opaque token). The browser app never sees a token, so an XSS bug can't steal a session. The frontend calls the API through its own `/api` proxy, so the cookies are first-party.
+Login sets two cookies, both `HttpOnly`, `SameSite=Lax`, and `Secure` in production: `sl_access` (1-hour JWT) and `sl_refresh` (7-day opaque token). The browser app never sees a token, so an XSS bug can't steal a session. The frontend calls the API through its own `/api` proxy, so the cookies are first-party.
 
 - **Rotation with reuse detection.** Every refresh swaps the refresh token for a new one; only SHA-256 hashes are stored. A rotated token showing up again means it was copied, so the whole login (token family) is revoked. A 30 s grace window covers two tabs refreshing at once.
 - **CSRF.** SameSite=Lax stops cross-site POSTs from carrying the cookies, and every cookie-authenticated write must also send `X-Requested-With` (403 otherwise), a header other sites can't add without passing CORS.
@@ -265,7 +279,10 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min | USER |
 | DELETE | `/api/holds/{seatId}` | USER |
 | GET | `/api/events/{id}/stream` (Server-Sent Events: `seats` on every change) | public |
-| POST | `/api/bookings` (`Idempotency-Key` header optional) | USER |
+| POST | `/api/payments/checkout` (`Idempotency-Key` optional): a booking, or a Razorpay order to pay | USER |
+| POST | `/api/payments/verify` (Checkout's signed result) | USER |
+| POST | `/api/payments/webhook` (Razorpay, HMAC-signed) | public |
+| POST | `/api/bookings` (`Idempotency-Key` header optional; refused while payments are on) | USER |
 | GET | `/api/bookings/me` (includes `ticketCode` once issued, `status`) | USER |
 | POST | `/api/bookings/{id}/cancel` (owner only, before the event starts) | USER |
 | GET / POST / DELETE | `/api/events/{id}/waitlist` (your status / join a sold-out event / leave) | USER |
@@ -312,4 +329,4 @@ Neon (Postgres) + Upstash (Redis) + CloudAMQP (RabbitMQ) + Render (API, Docker) 
 
 - Push hold expiries too (Redis keyspace notifications), instead of the 30 s backup refetch
 - Rate limiting on login and holds (Redis token bucket)
-- Revoke the short-lived access token at logout too (today it lapses within 15 minutes)
+- Revoke the short-lived access token at logout too (today it lapses within an hour)

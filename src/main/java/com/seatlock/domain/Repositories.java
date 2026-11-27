@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -68,5 +69,25 @@ public final class Repositories {
         @Modifying(clearAutomatically = true) // so the re-read after the update sees checkedInAt
         @Query("update Booking b set b.checkedInAt = :at where b.id = :id and b.checkedInAt is null and b.status = com.seatlock.domain.Booking.Status.CONFIRMED")
         int checkIn(@Param("id") Long id, @Param("at") Instant at);
+    }
+
+    public interface PaymentRepository extends JpaRepository<Payment, Long> {
+        Optional<Payment> findByOrderId(String orderId);
+        Optional<Payment> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
+        Optional<Payment> findByBookingId(Long bookingId);
+
+        /** CREATED -> PAID. Returns 0 if the other path (verify vs webhook) already did it. */
+        @Transactional
+        @Modifying(clearAutomatically = true)
+        @Query("update Payment p set p.status = com.seatlock.domain.Payment.Status.PAID, p.paymentId = :paymentId, p.bookingId = :bookingId "
+                + "where p.id = :id and p.status = com.seatlock.domain.Payment.Status.CREATED")
+        int markPaid(@Param("id") Long id, @Param("paymentId") String paymentId, @Param("bookingId") Long bookingId);
+
+        /** from -> REFUNDED. 1 means this caller owns the refund, so it's issued exactly once. */
+        @Transactional
+        @Modifying(clearAutomatically = true)
+        @Query("update Payment p set p.status = com.seatlock.domain.Payment.Status.REFUNDED, p.paymentId = :paymentId "
+                + "where p.id = :id and p.status = :from")
+        int markRefunded(@Param("id") Long id, @Param("paymentId") String paymentId, @Param("from") Payment.Status from);
     }
 }
