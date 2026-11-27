@@ -77,12 +77,12 @@ docker compose up -d
 ./mvnw spring-boot:run        # Windows: .\mvnw.cmd spring-boot:run
 ```
 
-On the first start with an empty database, the app creates the tables, four sample events with seat maps, and your admin account from `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
+On the first start the app creates the tables and your super admin account from `ADMIN_EMAIL` and `ADMIN_PASSWORD`. There is no sample data: sign in as the super admin and create events from the Dashboard (or approve an organizer).
 
 | URL | What |
 |---|---|
 | http://localhost:8080/actuator/health | should return `{"status":"UP"}` |
-| http://localhost:8080/api/events | sample events (JSON) |
+| http://localhost:8080/api/events | events (JSON; empty until you create one) |
 | http://localhost:15672 | RabbitMQ management UI (local default login `guest` / `guest`) |
 | http://localhost:8025 | Mailpit inbox: every email the app sends locally lands here |
 
@@ -90,7 +90,8 @@ On the first start with an empty database, the app creates the tables, four samp
 
 Follow the [Seatlock-Frontend](https://github.com/RishithChundru/Seatlock-Frontend) README, then open http://localhost:3000.
 - **Customers:** click **Sign in → Create an account**.
-- **Admin:** sign in with your `ADMIN_EMAIL` and `ADMIN_PASSWORD` to reach the **Admin** page, where you create events and upload cover photos.
+- **Super admin:** sign in with your `ADMIN_EMAIL` and `ADMIN_PASSWORD` to reach the **Dashboard**: every event, plus **Organizers** to review applications.
+- **Organizer:** create one at `/organizer/signup` (footer: "Host events on Seatlock"); approve it as the super admin and it unlocks.
 
 ### 6. Run the tests
 
@@ -196,6 +197,26 @@ docker run --rm -i -v "$PWD/load:/scripts" \
   grafana/k6 run /scripts/seatlock.js
 ```
 
+### Organizers, super admin and gate staff
+
+Seatlock is a marketplace: outside organizers host their own events.
+
+| Role | Can do |
+|---|---|
+| `ADMIN` (super admin) | Every event; review organizer applications; suspend or reinstate organizers; scan any ticket |
+| `ORGANIZER` | Create, edit and cancel **their own** events, see their sales, add gate staff, scan tickets for their events |
+| `STAFF` | Their organizer's dashboard, read-only, and the check-in scanner for that organizer's events |
+| `USER` | Book, pay, cancel, share |
+
+1. **Sign up as an organizer** at `/organizer/signup`, separate from customer sign-up: a 4-step form (account; organisation name, optional logo, city, about; public contact email, Indian mobile number (+91) and website; review and accept the terms). It creates an `ORGANIZER` account and its application together. The profile is shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive). Customer accounts can't become organizers.
+2. **Pending = read-only:** the organizer can sign in and look around their dashboard, but creating events, adding staff and check-in are blocked (in the API, not just the UI) until approved. Every super admin gets a "New organizer request" email linking to the review queue.
+3. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed; approval sends "You're approved".
+4. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
+5. **Staff:** organizers invite gate staff by name and email. Only emails with **no** Seatlock account can be invited, so a customer's or another organizer's account is never turned into a scanner. No account is created up front: the person gets an emailed link (one use, 7 days; only its hash is stored), creates their staff account there, and is attached to that organizer. Organizers can resend or cancel invites; removing a staff member disables that account (signed out everywhere). Staff see their organizer's dashboard read-only, and the scanner refuses tickets for anyone else's events.
+6. **Suspend:** stops the organizer and their staff at once (their dashboard turns read-only); their events stay on sale and can be cancelled by the super admin.
+
+Ownership is enforced in the service layer (`Access`), from the database rather than the JWT's role claim, so a suspension applies immediately; another organizer's event looks exactly like a missing one (404). The frontend picks up a role change by rotating the session (no sign-out needed). Covered by `OrganizerFlowTest`.
+
 ### Payments (Razorpay)
 
 With `RAZORPAY_KEY_ID` set, seats are booked only after a proven payment:
@@ -204,7 +225,7 @@ With `RAZORPAY_KEY_ID` set, seats are booked only after a proven payment:
 2. The browser opens Razorpay Checkout. On success it sends the signed result to `POST /api/payments/verify`; the server checks the HMAC-SHA256 signature of `order_id|payment_id` with the key secret before booking.
 3. Razorpay also calls `POST /api/payments/webhook` (signed over the raw body with the webhook secret), so the booking is made even if the tab closed after paying.
 4. Verify and webhook can arrive in any order, or together: the booking uses the order id as its idempotency key, so exactly one booking is made.
-5. If the seats were lost while paying (hold expired and someone else bought them), the payment is **refunded in full** automatically. Cancelling a paid booking refunds it too.
+5. If the seats were lost while paying (hold expired and someone else bought them), the payment is **refunded in full** automatically. Cancelling a paid booking refunds it too, and the cancellation email says the refund has started.
 
 Razorpay calls never run inside a DB transaction, and payment status only moves forward through conditional `UPDATE`s, so a refund is issued once. Without keys, checkout books instantly as before. Tested against a fake Razorpay API in `PaymentFlowTest`.
 
@@ -212,9 +233,10 @@ Razorpay calls never run inside a DB transaction, and payment status only moves 
 
 - **Tiers:** events can have VIP and Premium front rows (default prices 2× and 1.5× the standard price, or set your own). Each seat stores its tier, and the event stores the prices. Booking totals are summed per seat, and seat maps show tier and price, served from the same Redis cache as the rest of the map.
 - **Search:** `GET /api/events/search` filters upcoming events by text, category, city (parsed from "Place, City"), date window and max price, with pagination and the available cities and categories for the filter UI. It runs in memory over the cached event list. That's fine for hundreds of events, and the code notes when to move it to SQL.
-- **Gate check-in:** tickets carry a QR of their code. `POST /api/admin/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
+- **Gate check-in:** tickets carry a QR of their code. `POST /api/manage/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
 - **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
-- **Admin:** delete events (refused while confirmed bookings exist), remove covers. **Account:** change password (needs the current one).
+- **Admin:** cancel events: every ticket holder is cancelled, refunded if they paid, and emailed; the event is then removed, remove covers. **Account:** change password (needs the current one).
+- **Cancellation window and ticket sharing:** customers can cancel until 3 days before the event (`cancellableUntil` on each booking). After that they can share the ticket instead: a 128-bit random link (not the short ticket code, so links can't be guessed) opens a public page with the QR. A cancelled booking's link stops showing the code.
 
 ### Sessions: both tokens in httpOnly cookies
 
@@ -270,7 +292,17 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET | `/api/events`, `/api/events/{id}` (cached; include `city` and `tiers`) | public |
 | GET | `/api/events/search?q&category&city&from&to&maxPrice&page&size` | public |
 | DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
-| POST | `/api/admin/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` | ADMIN |
+| POST | `/api/manage/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` (only tickets the scanner may admit) | ADMIN, ORGANIZER, STAFF |
+| GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
+| POST | `/api/auth/register-organizer` `{account, organizer}`: organizer account + pending application | public |
+| GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
+| POST / DELETE | `/api/organizer/me/logo` (multipart `file`; JPEG/PNG/WebP, 1 MB, magic-byte checked; object storage or Postgres like covers) | ORGANIZER |
+| GET | `/api/organizers/{id}/logo` (versioned URL, cached for a year) | public |
+| GET / POST / DELETE | `/api/organizer/staff[/{id}]`: staff and pending invites; invite `{name, email}`; remove | ORGANIZER |
+| POST / DELETE | `/api/organizer/staff/invites/{id}/resend` · `/api/organizer/staff/invites/{id}` | ORGANIZER |
+| GET / POST | `/api/auth/staff-invite?token=` · `/api/auth/staff-invite/accept {token, name, password}`: create the staff account from an invite | public |
+| GET | `/api/admin/organizers?status=` | ADMIN |
+| POST | `/api/admin/organizers/{id}/approve` · `/reject {note}` · `/suspend {note?}` · `/reinstate` | ADMIN |
 | GET | `/api/account/me`; POST `/api/account/password` `{currentPassword, newPassword}` | USER |
 | GET | `/api/events/{id}/seats` (`HELD` / `mine` reflect live holds) | public |
 | POST | `/api/events` | ADMIN |
@@ -284,7 +316,9 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | POST | `/api/payments/webhook` (Razorpay, HMAC-signed) | public |
 | POST | `/api/bookings` (`Idempotency-Key` header optional; refused while payments are on) | USER |
 | GET | `/api/bookings/me` (includes `ticketCode` once issued, `status`) | USER |
-| POST | `/api/bookings/{id}/cancel` (owner only, before the event starts) | USER |
+| POST | `/api/bookings/{id}/cancel` (owner only, until 3 days before the event) | USER |
+| POST | `/api/bookings/{id}/share` (owner only): token for the public ticket link | USER |
+| GET | `/api/tickets/{token}` (shared ticket: event, seats, ticket code; no email or price) | public |
 | GET / POST / DELETE | `/api/events/{id}/waitlist` (your status / join a sold-out event / leave) | USER |
 | GET | `/api/waitlist/me` (your waitlists, with any seat offered to you) | USER |
 
@@ -295,7 +329,7 @@ The browser app authenticates with the httpOnly cookies (see Sessions); `POST /a
 ```
 src/main/java/com/seatlock/
 ├── api/          Controllers, DTOs, error handling
-├── config/       Security (JWT, CORS), sample-data seeder
+├── config/       Security (JWT, CORS), super admin seeder
 ├── domain/       JPA entities and repositories
 ├── messaging/    RabbitMQ config, publishers, ticket + waitlist consumers
 ├── realtime/     SSE streams fanned out over Redis pub/sub

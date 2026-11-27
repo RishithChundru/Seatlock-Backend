@@ -70,6 +70,7 @@ class BookingEvents {
                       @CacheEvict(value = SeatRows.CACHE, key = "#e.eventId", beforeInvocation = true)})
     public void onCancel(BookingCancelled e) {
         metrics.cancelled();
+        if (e.eventCancelled()) return; // the event is gone: nothing to offer the waitlist
         try {
             rabbit.convertAndSend(RabbitConfig.SEATS_RELEASED, new SeatsReleased(e.eventId(), e.seatIds()));
         } catch (RuntimeException ex) {

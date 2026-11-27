@@ -2,6 +2,7 @@ package com.seatlock.service;
 
 import com.seatlock.api.Dtos.BookingDto;
 import com.seatlock.api.Dtos.CheckInResult;
+import com.seatlock.api.Dtos.SharedTicket;
 import java.util.Locale;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
@@ -25,7 +26,8 @@ public class BookingService {
     public record BookingCommitted(Long bookingId, Long userId, Long eventId, List<Long> seatIds,
                                    String email, String eventTitle, List<String> seatLabels) {}
     public record BookingCancelled(Long bookingId, Long eventId, List<Long> seatIds,
-                                   String email, String eventTitle, List<String> seatLabels, int refundCents) {}
+                                   String email, String eventTitle, List<String> seatLabels, int refundCents,
+                                   boolean eventCancelled) {}
 
     private final BookingRepository bookings;
     private final SeatRepository seats;
@@ -35,10 +37,12 @@ public class BookingService {
     private final WaitlistRepository waitlist;
     private final ApplicationEventPublisher publisher;
     private final com.seatlock.config.SeatlockMetrics metrics;
+    private final Access access;
 
     public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users,
                           SeatHoldService holds, WaitlistRepository waitlist, ApplicationEventPublisher publisher,
-                          com.seatlock.config.SeatlockMetrics metrics) {
+                          com.seatlock.config.SeatlockMetrics metrics, Access access) {
+        this.access = access;
         this.metrics = metrics;
         this.bookings = bookings;
         this.seats = seats;
@@ -95,14 +99,41 @@ public class BookingService {
         Booking booking = bookings.findById(bookingId).filter(b -> b.getUser().getId().equals(userId))
                 .orElseThrow(() -> new NoSuchElementException("Booking not found"));
         if (booking.isCancelled()) return BookingDto.of(booking);
-        if (!booking.getEvent().getStartsAt().isAfter(Instant.now()))
-            throw new IllegalArgumentException("This event has already started and can't be cancelled");
+        if (!booking.cancellableUntil().isAfter(Instant.now()))
+            throw new IllegalArgumentException("Cancellations close 3 days before the event. You can share your ticket with someone instead.");
 
         List<Seat> freed = booking.cancel();
         seats.saveAllAndFlush(freed);
         publisher.publishEvent(new BookingCancelled(booking.getId(), booking.getEvent().getId(), freed.stream().map(Seat::getId).toList(),
-                booking.getUser().getEmail(), booking.getEvent().getTitle(), booking.seatLabels(), booking.getTotalCents()));
+                booking.getUser().getEmail(), booking.getEvent().getTitle(), booking.seatLabels(), booking.getTotalCents(), false));
         return BookingDto.of(booking);
+    }
+
+    /**
+     * The organiser called the event off: every confirmed booking is cancelled in the caller's transaction.
+     * After commit each holder is refunded (if they paid) and emailed; freed seats don't go to the waitlist.
+     */
+    @Transactional
+    public int cancelAllForEvent(Long eventId) {
+        List<Booking> confirmed = bookings.findByEventIdAndStatus(eventId, Booking.Status.CONFIRMED);
+        for (Booking b : confirmed) {
+            List<Seat> freed = b.cancel();
+            seats.saveAll(freed);
+            publisher.publishEvent(new BookingCancelled(b.getId(), eventId, freed.stream().map(Seat::getId).toList(),
+                    b.getUser().getEmail(), b.getEvent().getTitle(), b.seatLabels(), b.getTotalCents(), true));
+        }
+        return confirmed.size();
+    }
+
+    /** Check-in from a scanner: organizers and their staff can only admit tickets for their own events. */
+    @Transactional
+    public CheckInResult checkIn(String rawCode, Long eventId, Long scannerUserId) {
+        Booking b = bookings.findByTicketCode(rawCode.trim().toUpperCase(Locale.ROOT)).orElse(null);
+        if (b != null && !access.canScan(scannerUserId, b.getEvent())) {
+            metrics.checkIn("refused");
+            throw new CheckInRefusedException("This ticket isn't for one of your events");
+        }
+        return checkIn(rawCode, eventId);
     }
 
     /**
@@ -134,6 +165,27 @@ public class BookingService {
 
     public static class CheckInRefusedException extends RuntimeException {
         public CheckInRefusedException(String message) { super(message); }
+    }
+
+    /** Owner only. Returns the (stable) token for the public ticket page. */
+    @Transactional
+    public String share(Long userId, Long bookingId) {
+        Booking b = bookings.findById(bookingId).filter(x -> x.getUser().getId().equals(userId))
+                .orElseThrow(() -> new NoSuchElementException("Booking not found"));
+        if (b.isCancelled()) throw new IllegalArgumentException("This booking was cancelled");
+        if (b.getCheckedInAt() != null) throw new IllegalArgumentException("This ticket has already been used at the gate");
+        return b.shareToken();
+    }
+
+    /** Public: anyone holding the link sees the ticket (that's the point: it can be handed to a friend). */
+    @Transactional(readOnly = true)
+    public SharedTicket sharedTicket(String token) {
+        Booking b = bookings.findByShareToken(token).orElseThrow(() -> new NoSuchElementException("Ticket not found"));
+        Event e = b.getEvent();
+        String firstName = b.getUser().getName().trim().split("\\s+")[0];
+        return new SharedTicket(e.getId(), e.getTitle(), e.getVenue(), e.getStartsAt(), b.seatLabels(),
+                b.isCancelled() || b.getCheckedInAt() != null ? null : b.getTicketCode(), // used or void: nothing to scan
+                b.getStatus().name(), b.getCheckedInAt(), firstName);
     }
 
     @Transactional(readOnly = true)

@@ -39,10 +39,15 @@ public class EventService {
     private final WaitlistRepository waitlist;
     private final S3ImageStore objectStore; // isEnabled() only when S3_BUCKET is configured
     private final String objectPublicUrl;
+    private final BookingService bookingService;
+    private final OrganizerRepository organizers;
 
     public EventService(EventRepository events, SeatRepository seats, SeatHoldService holds, EventImageRepository images,
                         SeatRows seatRows, BookingRepository bookings, WaitlistRepository waitlist,
-                        S3ImageStore objectStore, @Value("${app.images.s3.public-url}") String objectPublicUrl) {
+                        S3ImageStore objectStore, @Value("${app.images.s3.public-url}") String objectPublicUrl,
+                        BookingService bookingService, OrganizerRepository organizers) {
+        this.bookingService = bookingService;
+        this.organizers = organizers;
         this.objectStore = objectStore;
         this.objectPublicUrl = objectPublicUrl.replaceAll("/+$", "");
         this.events = events;
@@ -127,11 +132,20 @@ public class EventService {
         return null;
     }
 
+    /** Hosted by Seatlock (super admin, sample data, tests). */
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, allEntries = true)})
     @Transactional
-    public EventDto create(CreateEventRequest r) {
+    public EventDto create(CreateEventRequest r) { return doCreate(r, null); }
+
+    /** organizerId: from Access.organizerForNewEvent; null = Seatlock. */
+    @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, allEntries = true)})
+    @Transactional
+    public EventDto create(CreateEventRequest r, Long organizerId) { return doCreate(r, organizerId); }
+
+    private EventDto doCreate(CreateEventRequest r, Long organizerId) {
         if (r.vip() + r.premium() > r.rows()) throw new IllegalArgumentException("VIP and Premium rows can't exceed the total rows");
         Event e = new Event(r.title(), r.venue(), r.category(), r.startsAt(), r.priceCents(), r.description());
+        e.setOrganizerId(organizerId);
         // Default upgrades: VIP 2x, Premium 1.5x the standard price, rounded to whole rupees.
         e.setTierPrices(r.vip() > 0 ? Objects.requireNonNullElse(r.vipPriceCents(), roundRupees(r.priceCents() * 2.0)) : null,
                 r.premium() > 0 ? Objects.requireNonNullElse(r.premiumPriceCents(), roundRupees(r.priceCents() * 1.5)) : null);
@@ -159,25 +173,33 @@ public class EventService {
         return toDto(e);
     }
 
-    /** Admin delete. Refused while anyone still holds a confirmed booking: cancel those first. */
+    /** Admin cancel + delete. Ticket holders are cancelled, refunded and emailed (see BookingService.cancelAllForEvent). */
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId"),
                       @CacheEvict(value = SeatRows.CACHE, key = "#eventId")})
     @Transactional
     public void delete(Long eventId) {
         Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
-        if (bookings.existsByEventIdAndStatus(eventId, Booking.Status.CONFIRMED))
-            throw new EventHasBookingsException();
+        bookingService.cancelAllForEvent(eventId);
         waitlist.deleteByEventId(eventId);
         seats.deleteByEventId(eventId);
-        bookings.deleteByEventId(eventId); // only cancelled ones are left
+        bookings.deleteByEventId(eventId); // all cancelled now
         if (images.existsById(eventId)) images.deleteById(eventId);
         String key = e.getImageKey();
         events.delete(e);
         objectStore.delete(key);
     }
 
-    public static class EventHasBookingsException extends RuntimeException {
-        public EventHasBookingsException() { super("This event has confirmed bookings. Cancel them before deleting it."); }
+    /** Dashboard rows with sales, for the events Access says this user may see. */
+    @Transactional(readOnly = true)
+    public List<ManagedEvent> manage(List<Event> visible) {
+        if (visible.isEmpty()) return List.of();
+        Map<Long, Object[]> stats = new java.util.HashMap<>();
+        bookings.statsFor(visible.stream().map(Event::getId).toList()).forEach(row -> stats.put((Long) row[0], row));
+        return visible.stream().map(e -> {
+            Object[] s = stats.get(e.getId());
+            return s == null ? new ManagedEvent(toDto(e), 0, 0, 0)
+                    : new ManagedEvent(toDto(e), ((Number) s[1]).longValue(), ((Number) s[2]).longValue(), ((Number) s[3]).longValue());
+        }).toList();
     }
 
     private EventDto toDto(Event e) {
@@ -191,6 +213,7 @@ public class EventService {
         tiers.add(new TierPrice("STANDARD", e.getPriceCents()));
         return new EventDto(e.getId(), e.getTitle(), e.getVenue(), e.getCategory(), e.getStartsAt(), e.getPriceCents(),
                 seats.countByEventId(e.getId()), seats.countByEventIdAndStatus(e.getId(), Seat.Status.AVAILABLE),
-                e.getDescription(), imageUrl, e.city(), tiers);
+                e.getDescription(), imageUrl, e.city(), tiers,
+                e.getOrganizerId() == null ? null : organizers.findById(e.getOrganizerId()).map(o -> HostDto.of(o, OrganizerService.logoUrl(o, objectPublicUrl))).orElse(null));
     }
 }

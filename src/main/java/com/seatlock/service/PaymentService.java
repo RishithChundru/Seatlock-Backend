@@ -9,12 +9,11 @@ import com.seatlock.service.BookingService.SeatUnavailableException;
 import com.seatlock.service.SeatRows.SeatRow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -38,6 +37,9 @@ public class PaymentService {
     /** Long enough to finish Checkout (its own timeout is shorter, see the frontend). */
     public static final Duration PAYMENT_HOLD = Duration.ofMinutes(15);
 
+    /** Published inside the cancelling transaction; RefundWorker calls Razorpay after commit. */
+    public record RefundRequested(String paymentId, int amountCents) {}
+
     public static class PaymentRefundedException extends RuntimeException {
         public PaymentRefundedException(String message) { super(message); }
     }
@@ -48,9 +50,11 @@ public class PaymentService {
     private final SeatHoldService holds;
     private final SeatRows seatRows;
     private final JsonMapper json;
+    private final ApplicationEventPublisher publisher;
 
     public PaymentService(RazorpayClient razorpay, PaymentRepository payments, BookingService bookings,
-                          SeatHoldService holds, SeatRows seatRows, JsonMapper json) {
+                          SeatHoldService holds, SeatRows seatRows, JsonMapper json, ApplicationEventPublisher publisher) {
+        this.publisher = publisher;
         this.razorpay = razorpay;
         this.payments = payments;
         this.bookings = bookings;
@@ -136,7 +140,7 @@ public class PaymentService {
         return booking;
     }
 
-    private void refund(String paymentId, int amount) {
+    void refund(String paymentId, int amount) {
         try {
             razorpay.refund(paymentId, amount);
             log.info("Refunded payment {}", paymentId);
@@ -151,19 +155,15 @@ public class PaymentService {
     private static String bookingKey(Payment p) { return "rzp:" + p.getOrderId(); }
 
     /**
-     * Cancelling a paid booking refunds it. Runs inside the cancel transaction (status change commits with it);
-     * the Razorpay call happens after commit, so a rollback never refunds and the call holds no DB connection.
+     * Cancelling a paid booking (by the user, or the whole event by an admin) refunds it. Runs inside the cancel
+     * transaction, so the status change commits with it; the Razorpay call happens after commit, so a rollback
+     * never refunds.
      */
     @EventListener
     void onCancelled(BookingCancelled e) {
         payments.findByBookingId(e.bookingId()).filter(p -> p.getStatus() == Payment.Status.PAID).ifPresent(p -> {
             p.refunded();
-            String paymentId = p.getPaymentId();
-            int amount = p.getAmountCents();
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() { refund(paymentId, amount); }
-            });
+            publisher.publishEvent(new RefundRequested(p.getPaymentId(), p.getAmountCents()));
         });
     }
 }

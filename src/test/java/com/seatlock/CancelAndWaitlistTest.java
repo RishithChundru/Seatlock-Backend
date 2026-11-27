@@ -57,7 +57,7 @@ class CancelAndWaitlistTest {
 
     @Test
     void cancellingFreesSeatsAndOffersThemToTheWaitlistInOrder() throws Exception {
-        EventDto ev = event(2, Instant.now().plus(Duration.ofDays(3)));
+        EventDto ev = event(2, Instant.now().plus(Duration.ofDays(10)));
         List<Long> ids = seatIds(ev.id());
         Long alice = user("alice"), bob = user("bob"), carol = user("carol"), dave = user("dave");
 
@@ -86,7 +86,7 @@ class CancelAndWaitlistTest {
 
     @Test
     void cancelIsOwnerOnlyAndIdempotent() {
-        EventDto ev = event(1, Instant.now().plus(Duration.ofDays(3)));
+        EventDto ev = event(1, Instant.now().plus(Duration.ofDays(10)));
         Long alice = user("alice"), mallory = user("mallory");
         var booking = bookings.book(alice, ev.id(), seatIds(ev.id()), null);
 
@@ -106,7 +106,7 @@ class CancelAndWaitlistTest {
 
     @Test
     void waitlistIsOnlyForSoldOutEvents() {
-        EventDto ev = event(2, Instant.now().plus(Duration.ofDays(3)));
+        EventDto ev = event(2, Instant.now().plus(Duration.ofDays(10)));
         assertThatThrownBy(() -> waitlist.join(user("bob"), ev.id()))
                 .isInstanceOf(WaitlistService.SeatsStillAvailableException.class);
     }

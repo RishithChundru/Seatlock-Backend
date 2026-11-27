@@ -26,7 +26,7 @@ class ImageFallbackTest {
         when(store.put(any(), any(), any())).thenThrow(new RuntimeException("503 Service Unavailable"));
 
         var service = new EventService(events, mock(SeatRepository.class), mock(SeatHoldService.class), images,
-                mock(SeatRows.class), mock(BookingRepository.class), mock(WaitlistRepository.class), store, "https://cdn.test");
+                mock(SeatRows.class), mock(BookingRepository.class), mock(WaitlistRepository.class), store, "https://cdn.test", mock(BookingService.class), mock(OrganizerRepository.class));
         byte[] png = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0};
         var dto = service.setImage(7L, png);
 

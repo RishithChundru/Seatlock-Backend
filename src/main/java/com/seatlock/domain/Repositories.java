@@ -16,13 +16,32 @@ public final class Repositories {
     public interface UserRepository extends JpaRepository<AppUser, Long> {
         Optional<AppUser> findByEmail(String email);
         boolean existsByEmail(String email);
+        List<AppUser> findAllByStaffOfOrderByNameAsc(Long organizerId);
+        List<AppUser> findAllByRole(AppUser.Role role);
+    }
+
+    public interface OrganizerRepository extends JpaRepository<Organizer, Long> {
+        Optional<Organizer> findByUserId(Long userId);
+        List<Organizer> findAllByOrderByCreatedAtDesc();
+        List<Organizer> findAllByStatusOrderByCreatedAtAsc(Organizer.Status status);
+        boolean existsByNameIgnoreCaseAndUserIdNot(String name, Long userId);
+        boolean existsByNameIgnoreCase(String name);
     }
 
     public interface EventRepository extends JpaRepository<Event, Long> {
         List<Event> findAllByOrderByStartsAtAsc();
+        List<Event> findAllByOrganizerIdOrderByStartsAtAsc(Long organizerId);
     }
 
     public interface EventImageRepository extends JpaRepository<EventImage, Long> {}
+
+    public interface OrganizerLogoRepository extends JpaRepository<OrganizerLogo, Long> {}
+
+    public interface StaffInviteRepository extends JpaRepository<StaffInvite, Long> {
+        Optional<StaffInvite> findByTokenHash(String tokenHash);
+        List<StaffInvite> findAllByOrganizerIdAndUsedAtIsNullOrderByCreatedAtAsc(Long organizerId);
+        void deleteByOrganizerIdAndEmailAndUsedAtIsNull(Long organizerId, String email);
+    }
 
     public interface SeatRepository extends JpaRepository<Seat, Long> {
         List<Seat> findByEventIdOrderByRowLabelAscSeatNumberAsc(Long eventId);
@@ -59,7 +78,14 @@ public final class Repositories {
         Optional<Booking> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
         List<Booking> findTop100ByTicketIssuedAtIsNullAndCreatedAtBefore(Instant cutoff);
         Optional<Booking> findByTicketCode(String ticketCode);
+        Optional<Booking> findByShareToken(String shareToken);
         boolean existsByEventIdAndStatus(Long eventId, Booking.Status status);
+        List<Booking> findByEventIdAndStatus(Long eventId, Booking.Status status);
+
+        /** Per event: [eventId, confirmed bookings, revenue in paise, bookings checked in]. */
+        @Query("select b.event.id, count(b), coalesce(sum(b.totalCents), 0), count(b.checkedInAt) from Booking b "
+                + "where b.status = com.seatlock.domain.Booking.Status.CONFIRMED and b.event.id in :ids group by b.event.id")
+        List<Object[]> statsFor(@Param("ids") List<Long> eventIds);
         void deleteByEventId(Long eventId);
 
         /**

@@ -28,6 +28,8 @@ public class Event {
     /** Object-storage key when the cover lives in S3/R2; null when it's in Postgres (or there's none). */
     @Column(length = 200)
     private String imageKey;
+    /** Null = hosted by Seatlock (created by the super admin). */
+    private Long organizerId;
 
     protected Event() {}
 
@@ -64,6 +66,8 @@ public class Event {
     public void imageChanged() { this.imageUpdatedAt = Instant.now(); }
     public void imageRemoved() { this.imageUpdatedAt = null; this.imageKey = null; }
     public String getImageKey() { return imageKey; }
+    public Long getOrganizerId() { return organizerId; }
+    public void setOrganizerId(Long organizerId) { this.organizerId = organizerId; }
     public void setImageKey(String imageKey) { this.imageKey = imageKey; }
 
     public Long getId() { return id; }

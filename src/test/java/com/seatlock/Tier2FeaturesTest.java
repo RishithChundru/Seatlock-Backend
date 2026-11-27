@@ -142,16 +142,74 @@ class Tier2FeaturesTest {
     }
 
     @Test
-    void deletingAnEventIsRefusedWhileItHasConfirmedBookings() {
-        EventDto ev = event("Doomed", "Hall, Goa", "Comedy", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
-        AppUser fan = user("fan");
+    void cancellingAnEventWithBookingsCancelsThemAndEmailsEveryHolder() throws Exception {
+        EventDto ev = event("Doomed " + run, "Hall, Goa", "Comedy", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
+        AppUser fan = user("doomedfan");
         var booking = bookings.book(fan.getId(), ev.id(), List.of(seatsOf(ev.id()).get(0).getId()), null);
 
-        assertThatThrownBy(() -> events.delete(ev.id())).isInstanceOf(EventService.EventHasBookingsException.class);
-        bookings.cancel(fan.getId(), booking.id());
         events.delete(ev.id());
         assertThat(seatsOf(ev.id())).isEmpty();
         assertThat(bookingRepo.findById(booking.id())).isEmpty();
+        assertThat(inbox(fan.getEmail(), "Event cancelled")).contains("Event cancelled: Doomed " + run);
+    }
+
+    /** Polls Mailpit for a message to this address whose subject contains the text; returns the search result. */
+    private String inbox(String to, String subject) throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+        String query = java.net.URLEncoder.encode("to:\"" + to + "\" subject:\"" + subject + "\"", java.nio.charset.StandardCharsets.UTF_8);
+        String found = "";
+        for (int i = 0; i < 50 && !found.contains("\"ID\""); i++) {
+            Thread.sleep(200); // emails go out on a worker thread after commit
+            found = http.send(HttpRequest.newBuilder(URI.create(mailpitApi + "/api/v1/search?query=" + query)).build(),
+                    HttpResponse.BodyHandlers.ofString()).body();
+        }
+        return found;
+    }
+
+    @Test
+    void cancellingClosesThreeDaysBeforeTheEvent() {
+        EventDto soon = event("Soon " + run, "Hall, Goa", "Comedy", 1000, Instant.now().plus(Duration.ofDays(2)), 1, null, null);
+        AppUser fan = user("latefan");
+        var booking = bookings.book(fan.getId(), soon.id(), List.of(seatsOf(soon.id()).get(0).getId()), null);
+        assertThat(booking.cancellableUntil()).isBefore(Instant.now());
+        assertThatThrownBy(() -> bookings.cancel(fan.getId(), booking.id())).hasMessageContaining("3 days");
+    }
+
+    @Test
+    void aSharedTicketLinkShowsTheTicketToAnyoneWithoutPrivateDetails() throws Exception {
+        EventDto ev = event("Shared " + run, "Hall, Goa", "Concert", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
+        AppUser fan = user("sharer");
+        var booking = bookings.book(fan.getId(), ev.id(), List.of(seatsOf(ev.id()).get(0).getId()), null);
+        String code = ticketCode(booking.id());
+
+        String token = bookings.share(fan.getId(), booking.id());
+        assertThat(token).hasSize(22);
+        assertThat(bookings.share(fan.getId(), booking.id())).as("same link every time").isEqualTo(token);
+        assertThatThrownBy(() -> bookings.share(user("stranger").getId(), booking.id())).isInstanceOf(java.util.NoSuchElementException.class);
+
+        var shared = bookings.sharedTicket(token);
+        assertThat(shared.ticketCode()).isEqualTo(code);
+        assertThat(shared.seats()).isEqualTo(booking.seats());
+        assertThat(shared.status()).isEqualTo("CONFIRMED");
+        assertThatThrownBy(() -> bookings.sharedTicket("not-a-real-token")).isInstanceOf(java.util.NoSuchElementException.class);
+
+        bookings.cancel(fan.getId(), booking.id());
+        assertThat(bookings.sharedTicket(token).ticketCode()).as("a cancelled ticket can't be used from the link").isNull();
+    }
+
+    @Test
+    void aCheckedInTicketCantBeSharedAndItsLinkStopsShowingTheCode() throws Exception {
+        EventDto ev = event("Used " + run, "Hall, Goa", "Concert", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
+        AppUser fan = user("usedfan");
+        var booking = bookings.book(fan.getId(), ev.id(), List.of(seatsOf(ev.id()).get(0).getId()), null);
+        String code = ticketCode(booking.id());
+        String token = bookings.share(fan.getId(), booking.id()); // shared before the show
+
+        bookings.checkIn(code, ev.id());
+        assertThatThrownBy(() -> bookings.share(fan.getId(), booking.id())).hasMessageContaining("already been used");
+        var shared = bookings.sharedTicket(token);
+        assertThat(shared.ticketCode()).isNull();
+        assertThat(shared.checkedInAt()).isNotNull();
     }
 
     @Test

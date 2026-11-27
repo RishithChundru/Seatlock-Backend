@@ -55,11 +55,25 @@ public class Mailer {
                 "Book it now", frontendUrl + "/events/" + eventId));
     }
 
-    public void bookingCancelled(String to, String eventTitle, List<String> seats, int refundPaise) {
-        send(to, "Booking cancelled: " + eventTitle, layout("Your booking is cancelled.",
-                row("Event", eventTitle) + row("Seats", String.join(", ", seats))
-                        + row("Refund", "₹" + String.format(Locale.ENGLISH, "%,d", refundPaise / 100)),
-                "Find another event", frontendUrl + "/"));
+    /** refunded: a real (Razorpay) payment was refunded. eventCancelled: the organiser called the event off. */
+    public void bookingCancelled(String to, String eventTitle, List<String> seats, int refundPaise, boolean refunded, boolean eventCancelled) {
+        String amount = "₹" + String.format(Locale.ENGLISH, "%,d", refundPaise / 100);
+        String p = "<p style=\"margin:16px 0 0;color:#3d3a33;font-size:14px;line-height:1.5\">";
+        String note = (eventCancelled ? p + "We're sorry: the organiser has cancelled this event, so these tickets are no longer valid.</p>" : "")
+                + (refunded ? p + "Your refund of " + amount + " has been started to your original payment method. "
+                        + "Banks usually show it within 5 to 7 working days.</p>"
+                            : p + "No payment was taken for this booking, so there is nothing to refund.</p>");
+        send(to, (eventCancelled ? "Event cancelled: " : "Booking cancelled: ") + eventTitle + (refunded ? " (refund started)" : ""),
+                layout(eventCancelled ? "This event has been cancelled." : "Your booking is cancelled.",
+                        row("Event", eventTitle) + row("Seats", String.join(", ", seats)) + (refunded ? row("Refund", amount) : "") + note,
+                        "Find another event", frontendUrl + "/"));
+    }
+
+    /** One-paragraph notice (organizer review, staff access). Every value is escaped. */
+    public void notice(String to, String subject, String headline, String text, String cta, String path) {
+        send(to, subject, layout(htmlEscape(headline),
+                "<p style=\"margin:0;color:#3d3a33;font-size:15px;line-height:1.55\">" + htmlEscape(text) + "</p>",
+                htmlEscape(cta), frontendUrl + path));
     }
 
     private void send(String to, String subject, String html) {

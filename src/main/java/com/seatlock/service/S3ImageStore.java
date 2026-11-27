@@ -54,9 +54,12 @@ public class S3ImageStore implements AutoCloseable {
     public boolean isEnabled() { return s3 != null; }
 
     /** Stores the image under a fresh key (new upload = new URL, so it can be cached forever). Returns the key. */
-    public String put(Long eventId, String contentType, byte[] data) {
+    public String put(Long eventId, String contentType, byte[] data) { return putIn("events/" + eventId, contentType, data); }
+
+    /** Same, under any folder (e.g. organizers/{id}). */
+    public String putIn(String folder, String contentType, byte[] data) {
         String ext = switch (contentType) { case "image/png" -> "png"; case "image/webp" -> "webp"; default -> "jpg"; };
-        String key = "events/" + eventId + "/" + UUID.randomUUID() + "." + ext;
+        String key = folder + "/" + UUID.randomUUID() + "." + ext;
         s3.putObject(PutObjectRequest.builder().bucket(bucket).key(key).contentType(contentType)
                 .cacheControl("public, max-age=31536000, immutable").build(), RequestBody.fromBytes(data));
         return key;
