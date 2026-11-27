@@ -2,6 +2,7 @@ package com.seatlock.service;
 
 import com.seatlock.api.Dtos.BookingDto;
 import com.seatlock.api.Dtos.CheckInResult;
+import com.seatlock.api.Dtos.SharedTicket;
 import java.util.Locale;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
@@ -96,8 +97,8 @@ public class BookingService {
         Booking booking = bookings.findById(bookingId).filter(b -> b.getUser().getId().equals(userId))
                 .orElseThrow(() -> new NoSuchElementException("Booking not found"));
         if (booking.isCancelled()) return BookingDto.of(booking);
-        if (!booking.getEvent().getStartsAt().isAfter(Instant.now()))
-            throw new IllegalArgumentException("This event has already started and can't be cancelled");
+        if (!booking.cancellableUntil().isAfter(Instant.now()))
+            throw new IllegalArgumentException("Cancellations close 3 days before the event. You can share your ticket with someone instead.");
 
         List<Seat> freed = booking.cancel();
         seats.saveAllAndFlush(freed);
@@ -151,6 +152,25 @@ public class BookingService {
 
     public static class CheckInRefusedException extends RuntimeException {
         public CheckInRefusedException(String message) { super(message); }
+    }
+
+    /** Owner only. Returns the (stable) token for the public ticket page. */
+    @Transactional
+    public String share(Long userId, Long bookingId) {
+        Booking b = bookings.findById(bookingId).filter(x -> x.getUser().getId().equals(userId))
+                .orElseThrow(() -> new NoSuchElementException("Booking not found"));
+        if (b.isCancelled()) throw new IllegalArgumentException("This booking was cancelled");
+        return b.shareToken();
+    }
+
+    /** Public: anyone holding the link sees the ticket (that's the point: it can be handed to a friend). */
+    @Transactional(readOnly = true)
+    public SharedTicket sharedTicket(String token) {
+        Booking b = bookings.findByShareToken(token).orElseThrow(() -> new NoSuchElementException("Ticket not found"));
+        Event e = b.getEvent();
+        String firstName = b.getUser().getName().trim().split("\\s+")[0];
+        return new SharedTicket(e.getId(), e.getTitle(), e.getVenue(), e.getStartsAt(), b.seatLabels(),
+                b.isCancelled() ? null : b.getTicketCode(), b.getStatus().name(), b.getCheckedInAt(), firstName);
     }
 
     @Transactional(readOnly = true)

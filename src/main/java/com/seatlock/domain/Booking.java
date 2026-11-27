@@ -2,7 +2,10 @@ package com.seatlock.domain;
 
 import jakarta.persistence.*;
 import org.hibernate.annotations.ColumnDefault;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,6 +35,8 @@ public class Booking {
     /** "A1,A2": kept so a cancelled booking still shows its seats after they are released. */
     @Column(length = 400)
     private String seatLabels;
+    @Column(length = 32)
+    private String shareToken;
     @OneToMany(mappedBy = "booking")
     @OrderBy("rowLabel, seatNumber")
     private List<Seat> seats = new ArrayList<>();
@@ -60,6 +65,23 @@ public class Booking {
     }
 
     public enum Status { CONFIRMED, CANCELLED }
+
+    /** Customers can cancel until this long before the event; after that they can only share the ticket. */
+    public static final Duration CANCEL_CUTOFF = Duration.ofDays(3);
+
+    public Instant cancellableUntil() { return event.getStartsAt().minus(CANCEL_CUTOFF); }
+
+    /** The token for the public ticket page, created on first share. */
+    public String shareToken() {
+        if (shareToken == null) {
+            byte[] bytes = new byte[16];
+            RANDOM.nextBytes(bytes);
+            shareToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        }
+        return shareToken;
+    }
+
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     public Status getStatus() { return status; }
     public boolean isCancelled() { return status == Status.CANCELLED; }

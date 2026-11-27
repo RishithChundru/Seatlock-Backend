@@ -282,6 +282,26 @@ final class Controllers {
         BookingDto cancel(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
             return bookings.cancel(Long.valueOf(user.getSubject()), id);
         }
+
+        @PostMapping("/{id}/share")
+        ShareResponse share(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            return new ShareResponse(bookings.share(Long.valueOf(user.getSubject()), id));
+        }
+    }
+
+    /** Public shared-ticket page data. The token is 128 random bits, so links can't be guessed or enumerated. */
+    @RestController
+    @RequestMapping("/api/tickets")
+    static class TicketController {
+        private final BookingService bookings;
+
+        TicketController(BookingService bookings) { this.bookings = bookings; }
+
+        @GetMapping("/{token}")
+        SharedTicket shared(@PathVariable String token) {
+            if (token.length() > 32) throw new java.util.NoSuchElementException("Ticket not found");
+            return bookings.sharedTicket(token);
+        }
     }
 
     @RestController

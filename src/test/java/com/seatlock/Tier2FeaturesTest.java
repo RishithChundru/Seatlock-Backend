@@ -167,6 +167,37 @@ class Tier2FeaturesTest {
     }
 
     @Test
+    void cancellingClosesThreeDaysBeforeTheEvent() {
+        EventDto soon = event("Soon " + run, "Hall, Goa", "Comedy", 1000, Instant.now().plus(Duration.ofDays(2)), 1, null, null);
+        AppUser fan = user("latefan");
+        var booking = bookings.book(fan.getId(), soon.id(), List.of(seatsOf(soon.id()).get(0).getId()), null);
+        assertThat(booking.cancellableUntil()).isBefore(Instant.now());
+        assertThatThrownBy(() -> bookings.cancel(fan.getId(), booking.id())).hasMessageContaining("3 days");
+    }
+
+    @Test
+    void aSharedTicketLinkShowsTheTicketToAnyoneWithoutPrivateDetails() throws Exception {
+        EventDto ev = event("Shared " + run, "Hall, Goa", "Concert", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
+        AppUser fan = user("sharer");
+        var booking = bookings.book(fan.getId(), ev.id(), List.of(seatsOf(ev.id()).get(0).getId()), null);
+        String code = ticketCode(booking.id());
+
+        String token = bookings.share(fan.getId(), booking.id());
+        assertThat(token).hasSize(22);
+        assertThat(bookings.share(fan.getId(), booking.id())).as("same link every time").isEqualTo(token);
+        assertThatThrownBy(() -> bookings.share(user("stranger").getId(), booking.id())).isInstanceOf(java.util.NoSuchElementException.class);
+
+        var shared = bookings.sharedTicket(token);
+        assertThat(shared.ticketCode()).isEqualTo(code);
+        assertThat(shared.seats()).isEqualTo(booking.seats());
+        assertThat(shared.status()).isEqualTo("CONFIRMED");
+        assertThatThrownBy(() -> bookings.sharedTicket("not-a-real-token")).isInstanceOf(java.util.NoSuchElementException.class);
+
+        bookings.cancel(fan.getId(), booking.id());
+        assertThat(bookings.sharedTicket(token).ticketCode()).as("a cancelled ticket can't be used from the link").isNull();
+    }
+
+    @Test
     void ticketEmailArrivesInTheInbox() throws Exception {
         EventDto ev = event("Mail", "Hall, Goa", "Concert", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
         AppUser fan = user("mailfan");

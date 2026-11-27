@@ -215,6 +215,7 @@ Razorpay calls never run inside a DB transaction, and payment status only moves 
 - **Gate check-in:** tickets carry a QR of their code. `POST /api/admin/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
 - **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
 - **Admin:** cancel events: every ticket holder is cancelled, refunded if they paid, and emailed; the event is then removed, remove covers. **Account:** change password (needs the current one).
+- **Cancellation window and ticket sharing:** customers can cancel until 3 days before the event (`cancellableUntil` on each booking). After that they can share the ticket instead: a 128-bit random link (not the short ticket code, so links can't be guessed) opens a public page with the QR. A cancelled booking's link stops showing the code.
 
 ### Sessions: both tokens in httpOnly cookies
 
@@ -284,7 +285,9 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | POST | `/api/payments/webhook` (Razorpay, HMAC-signed) | public |
 | POST | `/api/bookings` (`Idempotency-Key` header optional; refused while payments are on) | USER |
 | GET | `/api/bookings/me` (includes `ticketCode` once issued, `status`) | USER |
-| POST | `/api/bookings/{id}/cancel` (owner only, before the event starts) | USER |
+| POST | `/api/bookings/{id}/cancel` (owner only, until 3 days before the event) | USER |
+| POST | `/api/bookings/{id}/share` (owner only): token for the public ticket link | USER |
+| GET | `/api/tickets/{token}` (shared ticket: event, seats, ticket code; no email or price) | public |
 | GET / POST / DELETE | `/api/events/{id}/waitlist` (your status / join a sold-out event / leave) | USER |
 | GET | `/api/waitlist/me` (your waitlists, with any seat offered to you) | USER |
 

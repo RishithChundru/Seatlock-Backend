@@ -37,13 +37,19 @@ public final class Dtos {
     /** status: CONFIRMED or CANCELLED. Cancelled bookings are refunded in full (simulated). */
     public record BookingDto(Long id, Long eventId, String eventTitle, String venue, Instant startsAt,
                              int totalCents, Instant createdAt, List<String> seats, String ticketCode,
-                             String status, Instant cancelledAt, Instant checkedInAt) {
+                             String status, Instant cancelledAt, Instant checkedInAt, Instant cancellableUntil) {
         public static BookingDto of(Booking b) {
             return new BookingDto(b.getId(), b.getEvent().getId(), b.getEvent().getTitle(), b.getEvent().getVenue(),
                     b.getEvent().getStartsAt(), b.getTotalCents(), b.getCreatedAt(), b.seatLabels(), b.getTicketCode(),
-                    b.getStatus().name(), b.getCancelledAt(), b.getCheckedInAt());
+                    b.getStatus().name(), b.getCancelledAt(), b.getCheckedInAt(), b.cancellableUntil());
         }
     }
+
+    public record ShareResponse(String token) {}
+
+    /** What anyone with the share link sees: no email, no price, no booking id. ticketCode is null once cancelled. */
+    public record SharedTicket(Long eventId, String eventTitle, String venue, Instant startsAt, List<String> seats,
+                               String ticketCode, String status, Instant checkedInAt, String sharedBy) {}
 
     public record CheckInRequest(@NotBlank @Size(max = 20) String code, Long eventId) {}
 

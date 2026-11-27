@@ -59,6 +59,7 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/prometheus").access((auth, ctx) ->
                         new AuthorizationDecision(metricsAllowed(ctx.getRequest().getHeader(HttpHeaders.AUTHORIZATION), metricsToken)))
                 .requestMatchers(HttpMethod.GET, "/api/events/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/tickets/*").permitAll() // shared ticket page, unguessable token
                 .requestMatchers(HttpMethod.POST, "/api/events", "/api/events/*/image").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/events/*", "/api/events/*/image").hasRole("ADMIN")
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")

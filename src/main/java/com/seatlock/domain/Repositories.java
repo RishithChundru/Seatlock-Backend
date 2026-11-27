@@ -59,6 +59,7 @@ public final class Repositories {
         Optional<Booking> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
         List<Booking> findTop100ByTicketIssuedAtIsNullAndCreatedAtBefore(Instant cutoff);
         Optional<Booking> findByTicketCode(String ticketCode);
+        Optional<Booking> findByShareToken(String shareToken);
         boolean existsByEventIdAndStatus(Long eventId, Booking.Status status);
         List<Booking> findByEventIdAndStatus(Long eventId, Booking.Status status);
         void deleteByEventId(Long eventId);
