@@ -18,7 +18,39 @@ public final class Dtos {
     /** imageUrl is versioned (?v=) so browsers can cache it forever; null when no cover was uploaded. */
     public record EventDto(Long id, String title, String venue, String category, Instant startsAt, int priceCents,
                            long totalSeats, long availableSeats, String description, String imageUrl,
-                           String city, List<TierPrice> tiers) implements Serializable {}
+                           String city, List<TierPrice> tiers, HostDto host) implements Serializable {}
+
+    /** "Hosted by" on an event: the organizer's public profile. Null host = hosted by Seatlock. */
+    public record HostDto(Long id, String name, String about, String city, String contactEmail, String contactPhone,
+                          String website) implements Serializable {
+        public static HostDto of(Organizer o) {
+            return new HostDto(o.getId(), o.getName(), o.getAbout(), o.getCity(), o.getContactEmail(), o.getContactPhone(), o.getWebsite());
+        }
+    }
+
+    /** Organizer onboarding form. Everything here is shown to customers on the organizer's events. */
+    public record OrganizerRequest(@NotBlank @Size(min = 2, max = 80) String name,
+                                   @NotBlank @Size(min = 20, max = 600) String about,
+                                   @NotBlank @Size(max = 60) String city,
+                                   @NotBlank @Email @Size(max = 120) String contactEmail,
+                                   @NotBlank @Pattern(regexp = "^\\+?[0-9 ()-]{7,20}$", message = "must be a valid phone number") String contactPhone,
+                                   @Size(max = 200) @Pattern(regexp = "^$|^https?://\\S+$", message = "must start with http:// or https://") String website) {}
+
+    /** status: PENDING, APPROVED, REJECTED or SUSPENDED. reviewNote: why it was rejected or suspended. */
+    public record OrganizerDto(Long id, String name, String about, String city, String contactEmail, String contactPhone,
+                               String website, String status, String reviewNote, Instant createdAt, Instant reviewedAt,
+                               String accountName, String accountEmail) {}
+
+    public record RejectRequest(@NotBlank @Size(max = 300) String note) {}
+
+    public record NoteRequest(@Size(max = 300) String note) {}
+
+    public record StaffRequest(@NotBlank @Email @Size(max = 254) String email) {}
+
+    public record StaffDto(Long id, String name, String email) {}
+
+    /** Dashboard row: the event plus its sales so far (confirmed bookings only). */
+    public record ManagedEvent(EventDto event, long bookings, long revenueCents, long checkedIn) {}
 
     /** tier: VIP, PREMIUM or STANDARD. Listed most expensive first. */
     public record TierPrice(String tier, int priceCents) implements Serializable {}

@@ -16,10 +16,19 @@ public final class Repositories {
     public interface UserRepository extends JpaRepository<AppUser, Long> {
         Optional<AppUser> findByEmail(String email);
         boolean existsByEmail(String email);
+        List<AppUser> findAllByStaffOfOrderByNameAsc(Long organizerId);
+    }
+
+    public interface OrganizerRepository extends JpaRepository<Organizer, Long> {
+        Optional<Organizer> findByUserId(Long userId);
+        List<Organizer> findAllByOrderByCreatedAtDesc();
+        List<Organizer> findAllByStatusOrderByCreatedAtAsc(Organizer.Status status);
+        boolean existsByNameIgnoreCaseAndUserIdNot(String name, Long userId);
     }
 
     public interface EventRepository extends JpaRepository<Event, Long> {
         List<Event> findAllByOrderByStartsAtAsc();
+        List<Event> findAllByOrganizerIdOrderByStartsAtAsc(Long organizerId);
     }
 
     public interface EventImageRepository extends JpaRepository<EventImage, Long> {}
@@ -62,6 +71,11 @@ public final class Repositories {
         Optional<Booking> findByShareToken(String shareToken);
         boolean existsByEventIdAndStatus(Long eventId, Booking.Status status);
         List<Booking> findByEventIdAndStatus(Long eventId, Booking.Status status);
+
+        /** Per event: [eventId, confirmed bookings, revenue in paise, bookings checked in]. */
+        @Query("select b.event.id, count(b), coalesce(sum(b.totalCents), 0), count(b.checkedInAt) from Booking b "
+                + "where b.status = com.seatlock.domain.Booking.Status.CONFIRMED and b.event.id in :ids group by b.event.id")
+        List<Object[]> statsFor(@Param("ids") List<Long> eventIds);
         void deleteByEventId(Long eventId);
 
         /**

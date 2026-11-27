@@ -138,7 +138,7 @@ class SessionAndPlatformTest {
     @Test
     void flywayAppliedEveryMigrationOnAFreshDatabase() {
         assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank", String.class))
-                .containsExactly("1", "2", "3", "4", "5");
+                .containsExactly("1", "2", "3", "4", "5", "6");
     }
 
     @Test

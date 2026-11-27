@@ -4,7 +4,9 @@ import com.seatlock.api.Dtos.*;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.UserRepository;
 import com.seatlock.service.AuthService;
+import com.seatlock.service.Access;
 import com.seatlock.service.BookingService;
+import com.seatlock.service.OrganizerService;
 import com.seatlock.service.PaymentService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -130,7 +132,10 @@ final class Controllers {
         private final SeatUpdates updates;
         private final WaitlistService waitlist;
 
-        EventController(EventService events, EventSearch search, SeatUpdates updates, WaitlistService waitlist) {
+        private final Access access;
+
+        EventController(EventService events, EventSearch search, SeatUpdates updates, WaitlistService waitlist, Access access) {
+            this.access = access;
             this.events = events;
             this.search = search;
             this.updates = updates;
@@ -150,12 +155,19 @@ final class Controllers {
             return search.search(q, category, city, from, to, maxPrice, page, size);
         }
 
+        /** Cancel + delete. Super admin: any event. Organizer: their own (Access). */
         @DeleteMapping("/{id}")
         @ResponseStatus(HttpStatus.NO_CONTENT)
-        void delete(@PathVariable Long id) { events.delete(id); }
+        void delete(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
+            access.requireManage(Long.valueOf(user.getSubject()), id);
+            events.delete(id);
+        }
 
         @DeleteMapping("/{id}/image")
-        EventDto removeImage(@PathVariable Long id) { return events.removeImage(id); }
+        EventDto removeImage(@PathVariable Long id, @AuthenticationPrincipal Jwt user) {
+            access.requireManage(Long.valueOf(user.getSubject()), id);
+            return events.removeImage(id);
+        }
 
         @GetMapping("/{id}")
         EventDto get(@PathVariable Long id) { return events.get(id); }
@@ -191,10 +203,14 @@ final class Controllers {
 
         @PostMapping
         @ResponseStatus(HttpStatus.CREATED)
-        EventDto create(@Valid @RequestBody CreateEventRequest r) { return events.create(r); }
+        EventDto create(@Valid @RequestBody CreateEventRequest r, @AuthenticationPrincipal Jwt user) {
+            return events.create(r, access.organizerForNewEvent(Long.valueOf(user.getSubject())));
+        }
 
         @PostMapping(value = "/{id}/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-        EventDto uploadImage(@PathVariable Long id, @RequestParam("file") MultipartFile file) throws IOException {
+        EventDto uploadImage(@PathVariable Long id, @RequestParam("file") MultipartFile file,
+                             @AuthenticationPrincipal Jwt user) throws IOException {
+            access.requireManage(Long.valueOf(user.getSubject()), id);
             return events.setImage(id, file.getBytes());
         }
 
@@ -304,16 +320,91 @@ final class Controllers {
         }
     }
 
+    /** Dashboard and scanner for super admin, organizers and gate staff. Each sees only what Access allows. */
     @RestController
-    @RequestMapping("/api/admin")
-    static class AdminController {
+    @RequestMapping("/api/manage")
+    static class ManageController {
         private final BookingService bookings;
+        private final EventService events;
+        private final Access access;
 
-        AdminController(BookingService bookings) { this.bookings = bookings; }
+        ManageController(BookingService bookings, EventService events, Access access) {
+            this.bookings = bookings;
+            this.events = events;
+            this.access = access;
+        }
 
-        /** Gate check-in: scan or type the ticket code. ADMIN only (see SecurityConfig). */
+        @GetMapping("/events")
+        List<ManagedEvent> events(@AuthenticationPrincipal Jwt user) {
+            return events.manage(access.visibleEvents(Long.valueOf(user.getSubject())));
+        }
+
+        /** Gate check-in: scan or type the ticket code. */
         @PostMapping("/checkin")
-        CheckInResult checkIn(@Valid @RequestBody CheckInRequest r) { return bookings.checkIn(r.code(), r.eventId()); }
+        CheckInResult checkIn(@Valid @RequestBody CheckInRequest r, @AuthenticationPrincipal Jwt user) {
+            return bookings.checkIn(r.code(), r.eventId(), Long.valueOf(user.getSubject()));
+        }
+    }
+
+    /** Become an organizer (apply / edit profile) and, once approved, manage gate staff. */
+    @RestController
+    @RequestMapping("/api/organizer")
+    static class OrganizerController {
+        private final OrganizerService organizers;
+
+        OrganizerController(OrganizerService organizers) { this.organizers = organizers; }
+
+        /** 204 when the user hasn't applied. */
+        @GetMapping("/me")
+        ResponseEntity<OrganizerDto> me(@AuthenticationPrincipal Jwt user) {
+            return organizers.mine(Long.valueOf(user.getSubject())).map(ResponseEntity::ok)
+                    .orElseGet(() -> ResponseEntity.noContent().build());
+        }
+
+        @PutMapping("/me")
+        OrganizerDto apply(@AuthenticationPrincipal Jwt user, @Valid @RequestBody OrganizerRequest r) {
+            return organizers.apply(Long.valueOf(user.getSubject()), r);
+        }
+
+        @GetMapping("/staff")
+        List<StaffDto> staff(@AuthenticationPrincipal Jwt user) { return organizers.staff(Long.valueOf(user.getSubject())); }
+
+        @PostMapping("/staff")
+        @ResponseStatus(HttpStatus.CREATED)
+        StaffDto addStaff(@AuthenticationPrincipal Jwt user, @Valid @RequestBody StaffRequest r) {
+            return organizers.addStaff(Long.valueOf(user.getSubject()), r.email());
+        }
+
+        @DeleteMapping("/staff/{id}")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void removeStaff(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            organizers.removeStaff(Long.valueOf(user.getSubject()), id);
+        }
+    }
+
+    /** Super admin only (SecurityConfig): review organizer applications, suspend or reinstate organizers. */
+    @RestController
+    @RequestMapping("/api/admin/organizers")
+    static class AdminOrganizerController {
+        private final OrganizerService organizers;
+
+        AdminOrganizerController(OrganizerService organizers) { this.organizers = organizers; }
+
+        /** ?status=PENDING|APPROVED|REJECTED|SUSPENDED, or all. */
+        @GetMapping
+        List<OrganizerDto> list(@RequestParam(required = false) String status) { return organizers.list(status); }
+
+        @PostMapping("/{id}/approve")
+        OrganizerDto approve(@PathVariable Long id) { return organizers.approve(id); }
+
+        @PostMapping("/{id}/reject")
+        OrganizerDto reject(@PathVariable Long id, @Valid @RequestBody RejectRequest r) { return organizers.reject(id, r.note()); }
+
+        @PostMapping("/{id}/suspend")
+        OrganizerDto suspend(@PathVariable Long id, @Valid @RequestBody NoteRequest r) { return organizers.suspend(id, r.note()); }
+
+        @PostMapping("/{id}/reinstate")
+        OrganizerDto reinstate(@PathVariable Long id) { return organizers.reinstate(id); }
     }
 
     @RestController

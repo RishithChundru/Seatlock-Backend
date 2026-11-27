@@ -5,7 +5,8 @@ import jakarta.persistence.*;
 @Entity
 @Table(name = "users")
 public class AppUser {
-    public enum Role { USER, ADMIN }
+    /** ADMIN is the super admin. ORGANIZER hosts their own events. STAFF scans tickets for one organizer. */
+    public enum Role { USER, ADMIN, ORGANIZER, STAFF }
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -17,6 +18,8 @@ public class AppUser {
     private String passwordHash;
     @Enumerated(EnumType.STRING) @Column(nullable = false)
     private Role role;
+    /** For STAFF: the organizer they work for. */
+    private Long staffOf;
 
     protected AppUser() {}
 
@@ -34,4 +37,7 @@ public class AppUser {
     public Role getRole() { return role; }
 
     public void changePasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
+    public Long getStaffOf() { return staffOf; }
+    public void setRole(Role role) { this.role = role; }
+    public void setStaffOf(Long organizerId) { this.staffOf = organizerId; }
 }

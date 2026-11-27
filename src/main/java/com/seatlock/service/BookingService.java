@@ -37,10 +37,12 @@ public class BookingService {
     private final WaitlistRepository waitlist;
     private final ApplicationEventPublisher publisher;
     private final com.seatlock.config.SeatlockMetrics metrics;
+    private final Access access;
 
     public BookingService(BookingRepository bookings, SeatRepository seats, EventRepository events, UserRepository users,
                           SeatHoldService holds, WaitlistRepository waitlist, ApplicationEventPublisher publisher,
-                          com.seatlock.config.SeatlockMetrics metrics) {
+                          com.seatlock.config.SeatlockMetrics metrics, Access access) {
+        this.access = access;
         this.metrics = metrics;
         this.bookings = bookings;
         this.seats = seats;
@@ -121,6 +123,17 @@ public class BookingService {
                     b.getUser().getEmail(), b.getEvent().getTitle(), b.seatLabels(), b.getTotalCents(), true));
         }
         return confirmed.size();
+    }
+
+    /** Check-in from a scanner: organizers and their staff can only admit tickets for their own events. */
+    @Transactional
+    public CheckInResult checkIn(String rawCode, Long eventId, Long scannerUserId) {
+        Booking b = bookings.findByTicketCode(rawCode.trim().toUpperCase(Locale.ROOT)).orElse(null);
+        if (b != null && !access.canScan(scannerUserId, b.getEvent())) {
+            metrics.checkIn("refused");
+            throw new CheckInRefusedException("This ticket isn't for one of your events");
+        }
+        return checkIn(rawCode, eventId);
     }
 
     /**

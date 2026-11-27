@@ -90,7 +90,8 @@ On the first start with an empty database, the app creates the tables, four samp
 
 Follow the [Seatlock-Frontend](https://github.com/RishithChundru/Seatlock-Frontend) README, then open http://localhost:3000.
 - **Customers:** click **Sign in → Create an account**.
-- **Admin:** sign in with your `ADMIN_EMAIL` and `ADMIN_PASSWORD` to reach the **Admin** page, where you create events and upload cover photos.
+- **Super admin:** sign in with your `ADMIN_EMAIL` and `ADMIN_PASSWORD` to reach the **Dashboard**: every event, plus **Organizers** to review applications.
+- **Organizer:** any account can apply under **Host events**; once you approve it, that account gets its own dashboard.
 
 ### 6. Run the tests
 
@@ -196,6 +197,25 @@ docker run --rm -i -v "$PWD/load:/scripts" \
   grafana/k6 run /scripts/seatlock.js
 ```
 
+### Organizers, super admin and gate staff
+
+Seatlock is a marketplace: outside organizers host their own events.
+
+| Role | Can do |
+|---|---|
+| `ADMIN` (super admin) | Every event; review organizer applications; suspend or reinstate organizers; scan any ticket |
+| `ORGANIZER` | Create, edit and cancel **their own** events, see their sales, add gate staff, scan tickets for their events |
+| `STAFF` | Only the check-in scanner, only for their organizer's events |
+| `USER` | Book, pay, cancel, share |
+
+1. **Apply:** a user fills a 3-step form (organisation name, city, about; public contact email, phone, website; review and accept the terms). This is the public profile shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive).
+2. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed.
+3. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
+4. **Staff:** organizers add gate staff by the email of an existing account; staff see only the scanner, and it refuses tickets for anyone else's events.
+5. **Suspend:** stops the organizer and their staff at once; their events stay on sale and can be cancelled by the super admin.
+
+Ownership is enforced in the service layer (`Access`), from the database rather than the JWT's role claim, so a suspension applies immediately; another organizer's event looks exactly like a missing one (404). The frontend picks up a role change by rotating the session (no sign-out needed). Covered by `OrganizerFlowTest`.
+
 ### Payments (Razorpay)
 
 With `RAZORPAY_KEY_ID` set, seats are booked only after a proven payment:
@@ -212,7 +232,7 @@ Razorpay calls never run inside a DB transaction, and payment status only moves 
 
 - **Tiers:** events can have VIP and Premium front rows (default prices 2× and 1.5× the standard price, or set your own). Each seat stores its tier, and the event stores the prices. Booking totals are summed per seat, and seat maps show tier and price, served from the same Redis cache as the rest of the map.
 - **Search:** `GET /api/events/search` filters upcoming events by text, category, city (parsed from "Place, City"), date window and max price, with pagination and the available cities and categories for the filter UI. It runs in memory over the cached event list. That's fine for hundreds of events, and the code notes when to move it to SQL.
-- **Gate check-in:** tickets carry a QR of their code. `POST /api/admin/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
+- **Gate check-in:** tickets carry a QR of their code. `POST /api/manage/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
 - **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
 - **Admin:** cancel events: every ticket holder is cancelled, refunded if they paid, and emailed; the event is then removed, remove covers. **Account:** change password (needs the current one).
 - **Cancellation window and ticket sharing:** customers can cancel until 3 days before the event (`cancellableUntil` on each booking). After that they can share the ticket instead: a 128-bit random link (not the short ticket code, so links can't be guessed) opens a public page with the QR. A cancelled booking's link stops showing the code.
@@ -271,7 +291,12 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET | `/api/events`, `/api/events/{id}` (cached; include `city` and `tiers`) | public |
 | GET | `/api/events/search?q&category&city&from&to&maxPrice&page&size` | public |
 | DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
-| POST | `/api/admin/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` | ADMIN |
+| POST | `/api/manage/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` (only tickets the scanner may admit) | ADMIN, ORGANIZER, STAFF |
+| GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
+| GET / PUT | `/api/organizer/me`: your organizer application / public profile (204 if none) | USER, ORGANIZER |
+| GET / POST / DELETE | `/api/organizer/staff[/{id}]`: gate staff | ORGANIZER |
+| GET | `/api/admin/organizers?status=` | ADMIN |
+| POST | `/api/admin/organizers/{id}/approve` · `/reject {note}` · `/suspend {note?}` · `/reinstate` | ADMIN |
 | GET | `/api/account/me`; POST `/api/account/password` `{currentPassword, newPassword}` | USER |
 | GET | `/api/events/{id}/seats` (`HELD` / `mine` reflect live holds) | public |
 | POST | `/api/events` | ADMIN |

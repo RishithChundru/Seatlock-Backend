@@ -69,6 +69,13 @@ public class Mailer {
                         "Find another event", frontendUrl + "/"));
     }
 
+    /** One-paragraph notice (organizer review, staff access). Every value is escaped. */
+    public void notice(String to, String subject, String headline, String text, String cta, String path) {
+        send(to, subject, layout(htmlEscape(headline),
+                "<p style=\"margin:0;color:#3d3a33;font-size:15px;line-height:1.55\">" + htmlEscape(text) + "</p>",
+                htmlEscape(cta), frontendUrl + path));
+    }
+
     private void send(String to, String subject, String html) {
         try {
             var message = sender.createMimeMessage();
