@@ -364,6 +364,12 @@ final class Controllers {
             return events.manage(access.visibleEvents(Long.valueOf(user.getSubject())));
         }
 
+        /** Weekly sales (last 8 weeks) and latest bookings, scoped like /events. */
+        @GetMapping("/insights")
+        Insights insights(@AuthenticationPrincipal Jwt user) {
+            return bookings.insights(access.visibleEvents(Long.valueOf(user.getSubject())));
+        }
+
         /** Gate check-in: scan or type the ticket code. */
         @PostMapping("/checkin")
         CheckInResult checkIn(@Valid @RequestBody CheckInRequest r, @AuthenticationPrincipal Jwt user) {

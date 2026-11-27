@@ -46,7 +46,7 @@ public class WaitlistService {
 
     @Transactional
     public WaitlistStatus join(Long userId, Long eventId) {
-        Event event = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event event = events.live(eventId);
         var existing = waitlist.findByEventIdAndUserId(eventId, userId);
         if (existing.isPresent()) return status(existing.get());
         if (!event.getStartsAt().isAfter(Instant.now())) throw new IllegalArgumentException("This event has already started");

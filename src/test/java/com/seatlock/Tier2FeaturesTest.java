@@ -148,8 +148,14 @@ class Tier2FeaturesTest {
         var booking = bookings.book(fan.getId(), ev.id(), List.of(seatsOf(ev.id()).get(0).getId()), null);
 
         events.delete(ev.id());
-        assertThat(seatsOf(ev.id())).isEmpty();
-        assertThat(bookingRepo.findById(booking.id())).isEmpty();
+        // The event is hidden everywhere, but the customer keeps the cancelled booking, marked as an event cancellation.
+        assertThatThrownBy(() -> events.get(ev.id())).isInstanceOf(java.util.NoSuchElementException.class);
+        assertThat(events.list()).noneMatch(e -> e.id().equals(ev.id()));
+        assertThatThrownBy(() -> bookings.book(user("latecomer").getId(), ev.id(), List.of(seatsOf(ev.id()).get(1).getId()), null))
+                .isInstanceOf(java.util.NoSuchElementException.class);
+        var kept = bookings.forUser(fan.getId()).stream().filter(b -> b.id().equals(booking.id())).findFirst().orElseThrow();
+        assertThat(kept.status()).isEqualTo("CANCELLED");
+        assertThat(kept.eventCancelled()).isTrue();
         assertThat(inbox(fan.getEmail(), "Event cancelled")).contains("Event cancelled: Doomed " + run);
     }
 

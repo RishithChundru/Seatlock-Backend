@@ -29,8 +29,13 @@ public final class Repositories {
     }
 
     public interface EventRepository extends JpaRepository<Event, Long> {
-        List<Event> findAllByOrderByStartsAtAsc();
-        List<Event> findAllByOrganizerIdOrderByStartsAtAsc(Long organizerId);
+        List<Event> findAllByCancelledAtIsNullOrderByStartsAtAsc();
+        List<Event> findAllByOrganizerIdAndCancelledAtIsNullOrderByStartsAtAsc(Long organizerId);
+
+        /** An event that can still be shown, booked or managed: cancelled ones read as not found. */
+        default Event live(Long id) {
+            return findById(id).filter(e -> !e.isCancelled()).orElseThrow(() -> new java.util.NoSuchElementException("Event not found"));
+        }
     }
 
     public interface EventImageRepository extends JpaRepository<EventImage, Long> {}
@@ -86,6 +91,14 @@ public final class Repositories {
         @Query("select b.event.id, count(b), coalesce(sum(b.totalCents), 0), count(b.checkedInAt) from Booking b "
                 + "where b.status = com.seatlock.domain.Booking.Status.CONFIRMED and b.event.id in :ids group by b.event.id")
         List<Object[]> statsFor(@Param("ids") List<Long> eventIds);
+
+        /** [createdAt, totalCents] of confirmed bookings for these events since a time (dashboard sales chart). */
+        @Query("select b.createdAt, b.totalCents from Booking b where b.event.id in :ids "
+                + "and b.status = com.seatlock.domain.Booking.Status.CONFIRMED and b.createdAt >= :since")
+        List<Object[]> salesSince(@Param("ids") List<Long> eventIds, @Param("since") Instant since);
+
+        @Query("select b from Booking b join fetch b.event join fetch b.user where b.event.id in :ids order by b.createdAt desc")
+        List<Booking> latestFor(@Param("ids") List<Long> eventIds, org.springframework.data.domain.Pageable page);
         void deleteByEventId(Long eventId);
 
         /**

@@ -235,7 +235,7 @@ Razorpay calls never run inside a DB transaction, and payment status only moves 
 - **Search:** `GET /api/events/search` filters upcoming events by text, category, city (parsed from "Place, City"), date window and max price, with pagination and the available cities and categories for the filter UI. It runs in memory over the cached event list. That's fine for hundreds of events, and the code notes when to move it to SQL.
 - **Gate check-in:** tickets carry a QR of their code. `POST /api/manage/checkin` admits a ticket with **one conditional `UPDATE … WHERE checked_in_at IS NULL`**, so 20 scanners hitting the same ticket at once admit it exactly once (tested). A repeat scan reports when it was first used. Wrong-event and cancelled tickets are refused.
 - **Email:** ticket issued, waitlist seat held and booking cancelled emails go out over SMTP (Mailpit locally, any provider such as Resend in production). Mail is **never sent inside a DB transaction**: the k6 work showed how holding a connection during slow I/O starves the pool. So mail goes out after commit, and the cancellation email is `@Async`. It's best-effort: an SMTP outage is logged and never blocks a booking.
-- **Admin:** cancel events: every ticket holder is cancelled, refunded if they paid, and emailed; the event is then removed, remove covers. **Account:** change password (needs the current one).
+- **Admin:** cancel events: every ticket holder is cancelled, refunded if they paid, and emailed. The event is kept but marked cancelled (`events.cancelled_at`, V9): it disappears from listings, seat maps, holds and booking, while customers still see those bookings as "event cancelled" (`eventCancelled` on each booking). Remove covers. **Account:** change password (needs the current one).
 - **Cancellation window and ticket sharing:** customers can cancel until 3 days before the event (`cancellableUntil` on each booking). After that they can share the ticket instead: a 128-bit random link (not the short ticket code, so links can't be guessed) opens a public page with the QR. A cancelled booking's link stops showing the code.
 
 ### Sessions: both tokens in httpOnly cookies
@@ -294,6 +294,7 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
 | POST | `/api/manage/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` (only tickets the scanner may admit) | ADMIN, ORGANIZER, STAFF |
 | GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
+| GET | `/api/manage/insights`: bookings and revenue per week (last 8 weeks, IST) and the latest bookings, across the events this user manages | ADMIN, ORGANIZER, STAFF |
 | POST | `/api/auth/register-organizer` `{account, organizer}`: organizer account + pending application | public |
 | GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
 | POST / DELETE | `/api/organizer/me/logo` (multipart `file`; JPEG/PNG/WebP, 1 MB, magic-byte checked; object storage or Postgres like covers) | ORGANIZER |
@@ -308,7 +309,7 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | POST | `/api/events` | ADMIN |
 | POST | `/api/events/{id}/image` (multipart `file`, JPEG/PNG/WebP ≤ 2 MB) | ADMIN |
 | GET | `/api/events/{id}/image?v=…` (immutable, cached 1 year) | public |
-| POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min | USER |
+| POST | `/api/holds` `{eventId, seatIds}` → hold for 5 min. Holds, checkout, bookings and waitlist joins are customer-only: admin, organizer and staff tokens get 403 | USER |
 | DELETE | `/api/holds/{seatId}` | USER |
 | GET | `/api/events/{id}/stream` (Server-Sent Events: `seats` on every change) | public |
 | POST | `/api/payments/checkout` (`Idempotency-Key` optional): a booking, or a Razorpay order to pay | USER |

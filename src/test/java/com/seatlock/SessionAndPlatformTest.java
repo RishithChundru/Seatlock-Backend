@@ -136,9 +136,26 @@ class SessionAndPlatformTest {
     }
 
     @Test
+    void onlyCustomerAccountsCanHoldOrBookSeats() throws Exception {
+        String body = "{\"eventId\":1,\"seatIds\":[1]}";
+        for (AppUser.Role role : new AppUser.Role[]{AppUser.Role.ADMIN, AppUser.Role.ORGANIZER, AppUser.Role.STAFF}) {
+            AppUser manager = users.save(new AppUser(role + "-" + UUID.randomUUID() + "@test.local", "M", "x", role));
+            for (String path : new String[]{"/api/holds", "/api/payments/checkout", "/api/bookings"}) {
+                var res = send(HttpRequest.newBuilder(URI.create(url(path))).header("Authorization", "Bearer " + auth.accessToken(manager))
+                        .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)));
+                assertThat(res.statusCode()).as(role + " " + path).isEqualTo(403);
+            }
+        }
+        // A customer gets past the role check (the made-up seat is then rejected by validation, not by security).
+        var customer = send(HttpRequest.newBuilder(URI.create(url("/api/holds"))).header("Authorization", "Bearer " + auth.accessToken(user()))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)));
+        assertThat(customer.statusCode()).isNotEqualTo(403);
+    }
+
+    @Test
     void flywayAppliedEveryMigrationOnAFreshDatabase() {
         assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank", String.class))
-                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
     }
 
     @Test

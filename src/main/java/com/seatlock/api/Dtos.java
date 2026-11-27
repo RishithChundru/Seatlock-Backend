@@ -6,6 +6,7 @@ import jakarta.validation.constraints.*;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 public final class Dtos {
@@ -68,6 +69,15 @@ public final class Dtos {
     public record AcceptInviteRequest(@NotBlank @Size(max = 100) String token, @NotBlank @Size(max = 60) String name,
                                       @NotBlank @Size(min = 8, max = 72) String password) {}
 
+    /** Dashboard chart point: confirmed bookings and revenue in the week starting weekStart (Monday, IST). */
+    public record WeekPoint(LocalDate weekStart, long bookings, long revenueCents) {}
+
+    public record RecentBooking(Long id, Long eventId, String eventTitle, List<String> seats, String customer, int totalCents,
+                                String status, Instant createdAt, boolean checkedIn) {}
+
+    /** Dashboard charts and tables: the last 8 weeks (oldest first) and the latest bookings. */
+    public record Insights(List<WeekPoint> weeks, List<RecentBooking> recent) {}
+
     /** Dashboard row: the event plus its sales so far (confirmed bookings only). */
     public record ManagedEvent(EventDto event, long bookings, long revenueCents, long checkedIn) {}
 
@@ -88,11 +98,13 @@ public final class Dtos {
     /** status: CONFIRMED or CANCELLED. Cancelled bookings are refunded in full (simulated). */
     public record BookingDto(Long id, Long eventId, String eventTitle, String venue, Instant startsAt,
                              int totalCents, Instant createdAt, List<String> seats, String ticketCode,
-                             String status, Instant cancelledAt, Instant checkedInAt, Instant cancellableUntil) {
+                             String status, Instant cancelledAt, Instant checkedInAt, Instant cancellableUntil,
+                             boolean eventCancelled) {
         public static BookingDto of(Booking b) {
             return new BookingDto(b.getId(), b.getEvent().getId(), b.getEvent().getTitle(), b.getEvent().getVenue(),
                     b.getEvent().getStartsAt(), b.getTotalCents(), b.getCreatedAt(), b.seatLabels(), b.getTicketCode(),
-                    b.getStatus().name(), b.getCancelledAt(), b.getCheckedInAt(), b.cancellableUntil());
+                    b.getStatus().name(), b.getCancelledAt(), b.getCheckedInAt(), b.cancellableUntil(),
+                    b.getEvent().isCancelled());
         }
     }
 

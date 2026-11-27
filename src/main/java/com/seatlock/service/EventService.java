@@ -63,12 +63,12 @@ public class EventService {
     @Cacheable(value = LIST_CACHE, sync = true) // sync: one rebuild per instance after eviction, not a stampede
     public List<EventDto> list() {
         // shortcut: 2 count queries per event, fine for dozens of events (and cached); use one GROUP BY query when it grows
-        return new ArrayList<>(events.findAllByOrderByStartsAtAsc().stream().map(this::toDto).toList());
+        return new ArrayList<>(events.findAllByCancelledAtIsNullOrderByStartsAtAsc().stream().map(this::toDto).toList());
     }
 
     @Cacheable(value = ITEM_CACHE, sync = true)
     public EventDto get(Long id) {
-        return toDto(events.findById(id).orElseThrow(() -> new NoSuchElementException("Event not found")));
+        return toDto(events.live(id));
     }
 
     /** Sold seats come from the cached SeatRows; live holds are overlaid from Redis on every call. No DB on a hit. */
@@ -92,7 +92,7 @@ public class EventService {
      */
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId")})
     public EventDto setImage(Long eventId, byte[] data) {
-        Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event e = events.live(eventId);
         if (data.length == 0 || data.length > MAX_IMAGE_BYTES) throw new IllegalArgumentException("Image must be under 2 MB");
         String type = sniffImageType(data);
         if (type == null) throw new IllegalArgumentException("Only JPEG, PNG or WebP images are allowed");
@@ -165,7 +165,7 @@ public class EventService {
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId")})
     @Transactional
     public EventDto removeImage(Long eventId) {
-        Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event e = events.live(eventId);
         String key = e.getImageKey();
         if (images.existsById(eventId)) images.deleteById(eventId);
         e.imageRemoved();
@@ -173,20 +173,19 @@ public class EventService {
         return toDto(e);
     }
 
-    /** Admin cancel + delete. Ticket holders are cancelled, refunded and emailed (see BookingService.cancelAllForEvent). */
+    /**
+     * Cancel an event. Ticket holders are cancelled, refunded and emailed (see BookingService.cancelAllForEvent).
+     * The event, its seats and bookings stay, marked cancelled, so customers still see what happened to their tickets.
+     */
     @Caching(evict = {@CacheEvict(value = LIST_CACHE, allEntries = true), @CacheEvict(value = ITEM_CACHE, key = "#eventId"),
                       @CacheEvict(value = SeatRows.CACHE, key = "#eventId")})
     @Transactional
     public void delete(Long eventId) {
-        Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event e = events.live(eventId);
         bookingService.cancelAllForEvent(eventId);
         waitlist.deleteByEventId(eventId);
-        seats.deleteByEventId(eventId);
-        bookings.deleteByEventId(eventId); // all cancelled now
-        if (images.existsById(eventId)) images.deleteById(eventId);
-        String key = e.getImageKey();
-        events.delete(e);
-        objectStore.delete(key);
+        e.cancel();
+        events.save(e);
     }
 
     /** Dashboard rows with sales, for the events Access says this user may see. */

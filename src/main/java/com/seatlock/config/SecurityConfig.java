@@ -67,6 +67,9 @@ public class SecurityConfig {
                 .requestMatchers("/api/manage/**").hasAnyRole("ADMIN", "ORGANIZER", "STAFF")
                 .requestMatchers("/api/organizer/staff/**").hasRole("ORGANIZER")
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                // Booking is for customer accounts only: super admin, organizers and gate staff never hold or buy seats.
+                .requestMatchers(HttpMethod.POST, "/api/holds", "/api/payments/checkout", "/api/payments/verify",
+                        "/api/bookings", "/api/events/*/waitlist").hasRole("USER")
                 .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.bearerTokenResolver(cookieOrHeaderResolver())
                     .jwt(j -> j.jwtAuthenticationConverter(rolesConverter())));

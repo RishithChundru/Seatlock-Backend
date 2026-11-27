@@ -30,8 +30,13 @@ public class Event {
     private String imageKey;
     /** Null = hosted by Seatlock (created by the super admin). */
     private Long organizerId;
+    /** Set when the organizer or admin calls the event off; the row stays so bookings keep their history. */
+    private Instant cancelledAt;
 
     protected Event() {}
+
+    public boolean isCancelled() { return cancelledAt != null; }
+    public void cancel() { if (cancelledAt == null) cancelledAt = Instant.now(); }
 
     public Event(String title, String venue, String category, Instant startsAt, int priceCents, String description) {
         this.title = title;
