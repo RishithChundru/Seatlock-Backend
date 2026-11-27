@@ -21,8 +21,9 @@ import com.seatlock.domain.Repositories.OrganizerLogoRepository;
 import org.springframework.beans.factory.annotation.Value;
 import com.seatlock.domain.Repositories.OrganizerRepository;
 import com.seatlock.domain.Repositories.UserRepository;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Caching;
+import org.springframework.cache.CacheManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,13 +55,16 @@ public class OrganizerService {
     private final StaffInviteRepository invites;
     private final RefreshTokenRepository refreshTokens;
     private final PasswordEncoder encoder;
+    private final CacheManager cacheManager;
     private final S3ImageStore objectStore;
     private final String objectPublicUrl;
 
     public OrganizerService(OrganizerRepository organizers, UserRepository users, ApplicationEventPublisher publisher,
                             OrganizerLogoRepository logos, S3ImageStore objectStore,
                             @Value("${app.images.s3.public-url}") String objectPublicUrl,
-                            StaffInviteRepository invites, RefreshTokenRepository refreshTokens, PasswordEncoder encoder) {
+                            StaffInviteRepository invites, RefreshTokenRepository refreshTokens, PasswordEncoder encoder,
+                            CacheManager cacheManager) {
+        this.cacheManager = cacheManager;
         this.invites = invites;
         this.refreshTokens = refreshTokens;
         this.encoder = encoder;
@@ -127,8 +131,6 @@ public class OrganizerService {
     }
 
     /** Organizer accounts only: fix a rejected application, or edit the profile customers see on events. */
-    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
-                      @CacheEvict(value = EventService.ITEM_CACHE, allEntries = true)}) // "Hosted by" shows on events
     @Transactional
     public OrganizerDto apply(Long userId, OrganizerRequest r) {
         AppUser u = users.findById(userId).orElseThrow();
@@ -151,6 +153,7 @@ public class OrganizerService {
         o.resubmit();
         organizers.save(o);
         if (fresh || resubmitted) tellAdmins(o, resubmitted ? "Organizer request updated: " : "New organizer request: ");
+        invalidateEventCaches(); // "Hosted by" shows the profile
         return dto(o, u);
     }
 
@@ -321,8 +324,6 @@ public class OrganizerService {
      * Logo upload (optional, any time except while suspended, also while pending). Not @Transactional: with
      * object storage the upload is network I/O, which must not hold a pooled DB connection.
      */
-    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
-                      @CacheEvict(value = EventService.ITEM_CACHE, allEntries = true)}) // "Hosted by" shows it
     public OrganizerDto setLogo(Long userId, byte[] data) {
         Organizer o = editable(userId);
         if (data.length == 0 || data.length > MAX_LOGO_BYTES) throw new IllegalArgumentException("Logo must be under 1 MB");
@@ -345,18 +346,18 @@ public class OrganizerService {
             o.logoChanged(null);
         }
         organizers.save(o);
+        invalidateEventCaches();
         if (oldKey != null && !oldKey.equals(o.getLogoKey())) objectStore.delete(oldKey);
         return dto(o, users.findById(userId).orElseThrow());
     }
 
-    @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
-                      @CacheEvict(value = EventService.ITEM_CACHE, allEntries = true)})
     public OrganizerDto removeLogo(Long userId) {
         Organizer o = editable(userId);
         String key = o.getLogoKey();
         if (logos.existsById(o.getId())) logos.deleteById(o.getId());
         o.logoRemoved();
         organizers.save(o);
+        invalidateEventCaches();
         objectStore.delete(key); // after the DB change; a leftover object is harmless
         return dto(o, users.findById(userId).orElseThrow());
     }
@@ -370,6 +371,25 @@ public class OrganizerService {
     public static String logoUrl(Organizer o, String objectPublicUrl) {
         if (o.getLogoKey() != null) return objectPublicUrl + "/" + o.getLogoKey();
         return o.getLogoUpdatedAt() == null ? null : "/api/organizers/" + o.getId() + "/logo?v=" + o.getLogoUpdatedAt().toEpochMilli();
+    }
+
+    /**
+     * Drops cached events (they embed "Hosted by"), immediately and after the change is committed.
+     * Not @CacheEvict(allEntries): Cache.clear() may run deferred, so the next read could still get the old profile.
+     */
+    private void invalidateEventCaches() {
+        Runnable invalidate = () -> List.of(EventService.LIST_CACHE, EventService.ITEM_CACHE).forEach(name -> {
+            var cache = cacheManager.getCache(name);
+            if (cache != null) cache.invalidate();
+        });
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() { invalidate.run(); }
+            });
+        } else {
+            invalidate.run();
+        }
     }
 
     private Organizer editable(Long userId) {

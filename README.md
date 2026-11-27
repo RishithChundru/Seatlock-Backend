@@ -77,12 +77,12 @@ docker compose up -d
 ./mvnw spring-boot:run        # Windows: .\mvnw.cmd spring-boot:run
 ```
 
-On the first start with an empty database, the app creates the tables, four sample events with seat maps, and your admin account from `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
+On the first start the app creates the tables and your super admin account from `ADMIN_EMAIL` and `ADMIN_PASSWORD`. There is no sample data: sign in as the super admin and create events from the Dashboard (or approve an organizer).
 
 | URL | What |
 |---|---|
 | http://localhost:8080/actuator/health | should return `{"status":"UP"}` |
-| http://localhost:8080/api/events | sample events (JSON) |
+| http://localhost:8080/api/events | events (JSON; empty until you create one) |
 | http://localhost:15672 | RabbitMQ management UI (local default login `guest` / `guest`) |
 | http://localhost:8025 | Mailpit inbox: every email the app sends locally lands here |
 
@@ -329,7 +329,7 @@ The browser app authenticates with the httpOnly cookies (see Sessions); `POST /a
 ```
 src/main/java/com/seatlock/
 ├── api/          Controllers, DTOs, error handling
-├── config/       Security (JWT, CORS), sample-data seeder
+├── config/       Security (JWT, CORS), super admin seeder
 ├── domain/       JPA entities and repositories
 ├── messaging/    RabbitMQ config, publishers, ticket + waitlist consumers
 ├── realtime/     SSE streams fanned out over Redis pub/sub

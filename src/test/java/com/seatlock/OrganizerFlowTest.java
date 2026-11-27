@@ -218,6 +218,7 @@ class OrganizerFlowTest {
         assertThat(organizers.removeLogo(host.getId()).logoUrl()).isNull();
         assertThatThrownBy(() -> organizers.logo(withLogo.id())).isInstanceOf(NoSuchElementException.class);
         assertThat(events.get(ev.id()).host().logoUrl()).as("event cache evicted").isNull();
+        assertThat(organizers.mine(host.getId()).orElseThrow().logoUrl()).as("stored profile").isNull();
     }
 
     @Test
