@@ -17,6 +17,7 @@ public final class Repositories {
         Optional<AppUser> findByEmail(String email);
         boolean existsByEmail(String email);
         List<AppUser> findAllByStaffOfOrderByNameAsc(Long organizerId);
+        List<AppUser> findAllByRole(AppUser.Role role);
     }
 
     public interface OrganizerRepository extends JpaRepository<Organizer, Long> {
@@ -24,6 +25,7 @@ public final class Repositories {
         List<Organizer> findAllByOrderByCreatedAtDesc();
         List<Organizer> findAllByStatusOrderByCreatedAtAsc(Organizer.Status status);
         boolean existsByNameIgnoreCaseAndUserIdNot(String name, Long userId);
+        boolean existsByNameIgnoreCase(String name);
     }
 
     public interface EventRepository extends JpaRepository<Event, Long> {

@@ -1,6 +1,7 @@
 package com.seatlock.api;
 
 import com.seatlock.domain.*;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 
 import java.io.Serializable;
@@ -10,9 +11,16 @@ import java.util.List;
 public final class Dtos {
     private Dtos() {}
 
-    public record UserDto(Long id, String email, String name, String role) {
-        public static UserDto of(AppUser u) { return new UserDto(u.getId(), u.getEmail(), u.getName(), u.getRole().name()); }
+    /** organizerStatus: for ORGANIZER accounts, PENDING / APPROVED / REJECTED / SUSPENDED (else null). */
+    public record UserDto(Long id, String email, String name, String role, String organizerStatus) {
+        public static UserDto of(AppUser u) { return of(u, null); }
+        public static UserDto of(AppUser u, String organizerStatus) {
+            return new UserDto(u.getId(), u.getEmail(), u.getName(), u.getRole().name(), organizerStatus);
+        }
     }
+
+    /** Organizer sign-up: a separate account type from customers, created together with its application. */
+    public record OrganizerSignupRequest(@NotNull @Valid RegisterRequest account, @NotNull @Valid OrganizerRequest organizer) {}
 
     // Serializable: cached in Redis
     /** imageUrl is versioned (?v=) so browsers can cache it forever; null when no cover was uploaded. */
@@ -33,7 +41,9 @@ public final class Dtos {
                                    @NotBlank @Size(min = 20, max = 600) String about,
                                    @NotBlank @Size(max = 60) String city,
                                    @NotBlank @Email @Size(max = 120) String contactEmail,
-                                   @NotBlank @Pattern(regexp = "^\\+?[0-9 ()-]{7,20}$", message = "must be a valid phone number") String contactPhone,
+                                   // India only for now: +91 and a 10-digit mobile number starting with 6-9 (spaces/dashes allowed).
+                                   @NotBlank @Pattern(regexp = "^\\+91[\\s-]?[6-9][0-9]{4}[\\s-]?[0-9]{5}$",
+                                           message = "must be an Indian mobile number: +91 and 10 digits") String contactPhone,
                                    @Size(max = 200) @Pattern(regexp = "^$|^https?://\\S+$", message = "must start with http:// or https://") String website) {}
 
     /** status: PENDING, APPROVED, REJECTED or SUSPENDED. reviewNote: why it was rejected or suspended. */

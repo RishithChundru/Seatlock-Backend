@@ -91,7 +91,7 @@ On the first start with an empty database, the app creates the tables, four samp
 Follow the [Seatlock-Frontend](https://github.com/RishithChundru/Seatlock-Frontend) README, then open http://localhost:3000.
 - **Customers:** click **Sign in → Create an account**.
 - **Super admin:** sign in with your `ADMIN_EMAIL` and `ADMIN_PASSWORD` to reach the **Dashboard**: every event, plus **Organizers** to review applications.
-- **Organizer:** any account can apply under **Host events**; once you approve it, that account gets its own dashboard.
+- **Organizer:** create one at `/organizer/signup` (footer: "Host events on Seatlock"); approve it as the super admin and it unlocks.
 
 ### 6. Run the tests
 
@@ -208,11 +208,12 @@ Seatlock is a marketplace: outside organizers host their own events.
 | `STAFF` | Only the check-in scanner, only for their organizer's events |
 | `USER` | Book, pay, cancel, share |
 
-1. **Apply:** a user fills a 3-step form (organisation name, city, about; public contact email, phone, website; review and accept the terms). This is the public profile shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive).
-2. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed.
-3. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
-4. **Staff:** organizers add gate staff by the email of an existing account; staff see only the scanner, and it refuses tickets for anyone else's events.
-5. **Suspend:** stops the organizer and their staff at once; their events stay on sale and can be cancelled by the super admin.
+1. **Sign up as an organizer** at `/organizer/signup`, separate from customer sign-up: a 4-step form (account; organisation name, city, about; public contact email, Indian mobile number (+91) and website; review and accept the terms). It creates an `ORGANIZER` account and its application together. The profile is shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive). Customer accounts can't become organizers.
+2. **Pending = read-only:** the organizer can sign in and look around their dashboard, but creating events, adding staff and check-in are blocked (in the API, not just the UI) until approved. Every super admin gets a "New organizer request" email linking to the review queue.
+3. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed; approval sends "You're approved".
+4. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
+5. **Staff:** organizers add gate staff by the email of an existing account; staff see only the scanner, and it refuses tickets for anyone else's events.
+6. **Suspend:** stops the organizer and their staff at once (their dashboard turns read-only); their events stay on sale and can be cancelled by the super admin.
 
 Ownership is enforced in the service layer (`Access`), from the database rather than the JWT's role claim, so a suspension applies immediately; another organizer's event looks exactly like a missing one (404). The frontend picks up a role change by rotating the session (no sign-out needed). Covered by `OrganizerFlowTest`.
 
@@ -293,7 +294,8 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
 | POST | `/api/manage/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` (only tickets the scanner may admit) | ADMIN, ORGANIZER, STAFF |
 | GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
-| GET / PUT | `/api/organizer/me`: your organizer application / public profile (204 if none) | USER, ORGANIZER |
+| POST | `/api/auth/register-organizer` `{account, organizer}`: organizer account + pending application | public |
+| GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
 | GET / POST / DELETE | `/api/organizer/staff[/{id}]`: gate staff | ORGANIZER |
 | GET | `/api/admin/organizers?status=` | ADMIN |
 | POST | `/api/admin/organizers/{id}/approve` · `/reject {note}` · `/suspend {note?}` · `/reinstate` | ADMIN |

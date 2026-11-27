@@ -53,8 +53,11 @@ final class Controllers {
         private final AuthService auth;
         private final boolean secureCookie;
 
-        AuthController(UserRepository users, PasswordEncoder encoder, AuthService auth,
+        private final OrganizerService organizers;
+
+        AuthController(UserRepository users, PasswordEncoder encoder, AuthService auth, OrganizerService organizers,
                        @org.springframework.beans.factory.annotation.Value("${app.auth.cookie-secure}") boolean secureCookie) {
+            this.organizers = organizers;
             this.users = users;
             this.encoder = encoder;
             this.auth = auth;
@@ -67,6 +70,18 @@ final class Controllers {
             if (users.existsByEmail(email)) throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already registered");
             AppUser u = users.save(new AppUser(email, r.name().trim(), encoder.encode(r.password()), AppUser.Role.USER));
             return withSession(HttpStatus.CREATED, auth.start(u));
+        }
+
+        /** Organizer sign-up (separate from customers): account + application, pending until the super admin approves. */
+        @PostMapping("/register-organizer")
+        ResponseEntity<AuthResponse> registerOrganizer(@Valid @RequestBody OrganizerSignupRequest r) {
+            String email = r.account().email().trim().toLowerCase(Locale.ROOT);
+            try {
+                AppUser u = organizers.signup(email, r.account().name().trim(), encoder.encode(r.account().password()), r.organizer());
+                return withSession(HttpStatus.CREATED, auth.start(u));
+            } catch (OrganizerService.EmailTakenException e) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+            }
         }
 
         @PostMapping("/login")
@@ -94,7 +109,7 @@ final class Controllers {
         /** Who is signed in, from the cookie alone and without rotating it. Used by the frontend route guard. */
         @GetMapping("/session")
         ResponseEntity<UserDto> session(@CookieValue(name = COOKIE, required = false) String refresh) {
-            return auth.peek(refresh).map(u -> ResponseEntity.ok(UserDto.of(u)))
+            return auth.peek(refresh).map(u -> ResponseEntity.ok(organizers.userDto(u)))
                     .orElse(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
         }
 
@@ -113,7 +128,7 @@ final class Controllers {
             return ResponseEntity.status(status)
                     .header(HttpHeaders.SET_COOKIE, cookie(COOKIE, s.refreshToken(), auth.refreshTtl()).toString(),
                             cookie(ACCESS_COOKIE, s.accessToken(), auth.accessTtl()).toString())
-                    .body(new AuthResponse(s.accessToken(), UserDto.of(s.user())));
+                    .body(new AuthResponse(s.accessToken(), organizers.userDto(s.user())));
         }
 
         private ResponseCookie cookie(String name, String value, Duration maxAge) {
@@ -414,7 +429,10 @@ final class Controllers {
         private final PasswordEncoder encoder;
         private final AuthService auth;
 
-        AccountController(UserRepository users, PasswordEncoder encoder, AuthService auth) {
+        private final OrganizerService organizers;
+
+        AccountController(UserRepository users, PasswordEncoder encoder, AuthService auth, OrganizerService organizers) {
+            this.organizers = organizers;
             this.users = users;
             this.encoder = encoder;
             this.auth = auth;
@@ -422,7 +440,7 @@ final class Controllers {
 
         @GetMapping("/me")
         UserDto me(@AuthenticationPrincipal Jwt user) {
-            return UserDto.of(users.findById(Long.valueOf(user.getSubject())).orElseThrow());
+            return organizers.userDto(users.findById(Long.valueOf(user.getSubject())).orElseThrow());
         }
 
         /**

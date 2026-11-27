@@ -3,6 +3,7 @@ package com.seatlock.service;
 import com.seatlock.api.Dtos.OrganizerDto;
 import com.seatlock.api.Dtos.OrganizerRequest;
 import com.seatlock.api.Dtos.StaffDto;
+import com.seatlock.api.Dtos.UserDto;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Organizer;
 import com.seatlock.domain.Repositories.OrganizerRepository;
@@ -37,12 +38,61 @@ public class OrganizerService {
         this.publisher = publisher;
     }
 
+    /** The session's user, with their organizer status so the frontend can show "pending" (read-only) or unlock. */
+    @Transactional(readOnly = true)
+    public UserDto userDto(AppUser u) {
+        String status = u.getRole() != AppUser.Role.ORGANIZER ? null
+                : organizers.findByUserId(u.getId()).map(o -> o.getStatus().name()).orElse(null);
+        return UserDto.of(u, status);
+    }
+
+    /**
+     * Organizer sign-up: creates an ORGANIZER account and its PENDING application in one go. Until the super admin
+     * approves it the account is read-only (Access only lets approved organizers act). Admins are emailed.
+     */
+    @Transactional
+    public AppUser signup(String email, String name, String passwordHash, OrganizerRequest r) {
+        if (users.existsByEmail(email)) throw new EmailTakenException();
+        if (organizers.existsByNameIgnoreCase(r.name().trim())) throw new IllegalArgumentException("Another organizer already uses that name");
+        AppUser u = users.save(new AppUser(email, name, passwordHash, AppUser.Role.ORGANIZER));
+        Organizer o = new Organizer(u.getId());
+        details(o, r);
+        organizers.save(o);
+        notice(u, "We received your organizer request", "Thanks for applying to host on Seatlock.",
+                "We'll review " + o.getName() + " and email you when it's approved, usually within a day. Until then you can sign in "
+                        + "and look around your dashboard.", "View status", "/organizer");
+        tellAdmins(o, "New organizer request: ");
+        return u;
+    }
+
+    public static class EmailTakenException extends RuntimeException {
+        public EmailTakenException() { super("Email already registered"); }
+    }
+
+    private void details(Organizer o, OrganizerRequest r) {
+        o.details(r.name().trim(), r.about().trim(), r.city().trim(), r.contactEmail().trim().toLowerCase(Locale.ROOT),
+                indianPhone(r.contactPhone()), blankToNull(r.website()));
+    }
+
+    /** Stored and shown as "+91 98765 43210". The request was already validated as +91 plus 10 digits. */
+    static String indianPhone(String raw) {
+        String d = raw.replaceAll("[^0-9]", "").substring(2); // drop the 91
+        return "+91 " + d.substring(0, 5) + " " + d.substring(5);
+    }
+
+    private void tellAdmins(Organizer o, String subjectPrefix) {
+        for (AppUser admin : users.findAllByRole(AppUser.Role.ADMIN))
+            notice(admin, subjectPrefix + o.getName(), "An organizer is waiting for review.",
+                    o.getName() + " (" + o.getCity() + ", " + o.getContactEmail() + ") wants to host events on Seatlock. "
+                            + "Approve it or request changes from the Organizers page.", "Review request", "/admin/organizers");
+    }
+
     @Transactional(readOnly = true)
     public Optional<OrganizerDto> mine(Long userId) {
         return organizers.findByUserId(userId).map(o -> dto(o, users.findById(o.getUserId()).orElseThrow()));
     }
 
-    /** Apply, fix a rejected application, or edit an approved profile. The profile is what customers see on events. */
+    /** Organizer accounts only: fix a rejected application, or edit the profile customers see on events. */
     @Caching(evict = {@CacheEvict(value = EventService.LIST_CACHE, allEntries = true),
                       @CacheEvict(value = EventService.ITEM_CACHE, allEntries = true)}) // "Hosted by" shows on events
     @Transactional
@@ -51,6 +101,8 @@ public class OrganizerService {
         if (u.getRole() == AppUser.Role.ADMIN) throw new IllegalArgumentException("You're the super admin: create events from the dashboard.");
         if (u.getRole() == AppUser.Role.STAFF)
             throw new IllegalArgumentException("Staff accounts can't host events. Ask your organizer to remove you first.");
+        if (u.getRole() == AppUser.Role.USER)
+            throw new IllegalArgumentException("Customer accounts can't host events. Create a separate organizer account instead.");
         String name = r.name().trim();
         if (organizers.existsByNameIgnoreCaseAndUserIdNot(name, userId))
             throw new IllegalArgumentException("Another organizer already uses that name");
@@ -60,14 +112,11 @@ public class OrganizerService {
         if (fresh) o = new Organizer(userId);
         else if (o.getStatus() == Organizer.Status.SUSPENDED)
             throw new IllegalArgumentException("This organizer account is suspended. Contact Seatlock support.");
-        o.details(name, r.about().trim(), r.city().trim(), r.contactEmail().trim().toLowerCase(Locale.ROOT),
-                r.contactPhone().trim(), blankToNull(r.website()));
+        details(o, r);
         boolean resubmitted = o.getStatus() == Organizer.Status.REJECTED;
         o.resubmit();
         organizers.save(o);
-        if (fresh || resubmitted)
-            notice(u, "We received your organizer application", "Thanks for applying to host on Seatlock.",
-                    "We'll review " + name + " and email you when it's approved, usually within a day.", "View application", "/organizer");
+        if (fresh || resubmitted) tellAdmins(o, resubmitted ? "Organizer request updated: " : "New organizer request: ");
         return dto(o, u);
     }
 
@@ -112,14 +161,13 @@ public class OrganizerService {
         return dto(o, u);
     }
 
-    /** Stops the organizer (and their staff, see Access) from managing or scanning. Their events stay on sale. */
+    /** Stops the organizer (and their staff, see Access) from managing or scanning; their account turns read-only. Events stay on sale. */
     @Transactional
     public OrganizerDto suspend(Long id, String note) {
         Organizer o = find(id);
         if (o.getStatus() != Organizer.Status.APPROVED) throw new IllegalArgumentException("Only approved organizers can be suspended");
         o.suspend(note == null || note.isBlank() ? null : note.trim());
         AppUser u = users.findById(o.getUserId()).orElseThrow();
-        u.setRole(AppUser.Role.USER);
         notice(u, "Your organizer account is suspended", "Your organizer account is suspended.",
                 (o.getReviewNote() == null ? "" : "Reason: " + o.getReviewNote() + " ") + "Contact Seatlock support to sort it out.",
                 "Open Seatlock", "/");

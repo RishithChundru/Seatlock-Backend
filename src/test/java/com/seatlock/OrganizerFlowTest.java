@@ -36,6 +36,7 @@ class OrganizerFlowTest {
     @Autowired UserRepository users;
     @Autowired SeatRepository seats;
     @Autowired BookingRepository bookingRepo;
+    @org.springframework.beans.factory.annotation.Value("${test.mailpit.api}") String mailpitApi;
 
     private final String run = UUID.randomUUID().toString().substring(0, 8);
 
@@ -67,21 +68,25 @@ class OrganizerFlowTest {
 
     @Test
     void anOrganizerIsReviewedThenHostsAndScansOnlyTheirOwnEvents() throws Exception {
-        AppUser host = user("host", AppUser.Role.USER);
-        AppUser rival = user("rival", AppUser.Role.USER);
         String name = "Night Owls " + run;
 
-        // Apply; names are unique; nothing can be hosted until approved.
-        var applied = organizers.apply(host.getId(), profile(name));
-        assertThat(applied.status()).isEqualTo("PENDING");
-        assertThatThrownBy(() -> organizers.apply(rival.getId(), profile(name.toUpperCase()))).hasMessageContaining("already uses that name");
+        // Organizer sign-up is its own account type, pending (read-only) until reviewed; names are unique.
+        AppUser host = organizers.signup("host-" + run + "@test.local", "Host", "x", profile(name));
+        assertThat(host.getRole()).isEqualTo(AppUser.Role.ORGANIZER);
+        assertThat(organizers.userDto(host).organizerStatus()).isEqualTo("PENDING");
+        var applied = organizers.mine(host.getId()).orElseThrow();
+        assertThatThrownBy(() -> organizers.signup("other-" + run + "@test.local", "O", "x", profile(name.toUpperCase())))
+                .hasMessageContaining("already uses that name");
+        assertThatThrownBy(() -> organizers.signup(host.getEmail(), "Dup", "x", profile("Fresh " + run)))
+                .isInstanceOf(OrganizerService.EmailTakenException.class);
         assertThatThrownBy(() -> access.organizerForNewEvent(host.getId())).isInstanceOf(Access.ForbiddenException.class);
+        assertThat(access.visibleEvents(host.getId())).isEmpty();
 
         // Rejected with a reason, fixed and resubmitted, then approved.
         assertThat(organizers.reject(applied.id(), "Please add a real website").status()).isEqualTo("REJECTED");
         assertThat(organizers.apply(host.getId(), profile(name)).status()).isEqualTo("PENDING");
         assertThat(organizers.approve(applied.id()).status()).isEqualTo("APPROVED");
-        assertThat(users.findById(host.getId()).orElseThrow().getRole()).isEqualTo(AppUser.Role.ORGANIZER);
+        assertThat(organizers.userDto(users.findById(host.getId()).orElseThrow()).organizerStatus()).isEqualTo("APPROVED");
 
         // Their event shows who hosts it; a Seatlock event has no host.
         Long orgId = access.organizerForNewEvent(host.getId());
@@ -104,7 +109,7 @@ class OrganizerFlowTest {
         organizers.addStaff(host.getId(), gate.getEmail().toUpperCase());
         assertThat(users.findById(gate.getId()).orElseThrow().getRole()).isEqualTo(AppUser.Role.STAFF);
         assertThat(organizers.staff(host.getId())).extracting(s -> s.email()).containsExactly(gate.getEmail());
-        assertThatThrownBy(() -> organizers.addStaff(host.getId(), rival.getEmail() + ".nope")).hasMessageContaining("No Seatlock account");
+        assertThatThrownBy(() -> organizers.addStaff(host.getId(), "nobody-" + run + "@test.local")).hasMessageContaining("No Seatlock account");
 
         String own = ticketFor(mine.id());
         String other = ticketFor(platform.id());
@@ -131,6 +136,45 @@ class OrganizerFlowTest {
         // Removing staff takes their access away.
         organizers.removeStaff(host.getId(), gate.getId());
         assertThat(users.findById(gate.getId()).orElseThrow().getRole()).isEqualTo(AppUser.Role.USER);
+    }
+
+    @Test
+    void theSuperAdminIsEmailedAboutEachNewRequest() throws Exception {
+        AppUser admin = user("boss", AppUser.Role.ADMIN);
+        organizers.signup("req-" + run + "@test.local", "Req", "x", profile("Request Co " + run));
+        String query = java.net.URLEncoder.encode("to:\"" + admin.getEmail() + "\"", java.nio.charset.StandardCharsets.UTF_8);
+        var http = java.net.http.HttpClient.newHttpClient();
+        String found = "";
+        for (int i = 0; i < 50 && !found.contains("New organizer request"); i++) {
+            Thread.sleep(200); // sent after commit on a worker thread
+            found = http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(mailpitApi + "/api/v1/search?query=" + query)).build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString()).body();
+        }
+        assertThat(found).contains("New organizer request: Request Co " + run);
+    }
+
+    @Test
+    void phoneNumbersAreIndianMobilesOnlyAndStoredInOneFormat() {
+        var v = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
+        java.util.function.Function<String, Boolean> ok = phone -> v.validate(new OrganizerRequest("Co", "We run intimate live music nights here.",
+                "Pune", "a@b.example", phone, "")).isEmpty();
+        assertThat(ok.apply("+91 98765 43210")).isTrue();
+        assertThat(ok.apply("+919876543210")).isTrue();
+        assertThat(ok.apply("+91-98765-43210")).isTrue();
+        assertThat(ok.apply("9876543210")).as("needs +91").isFalse();
+        assertThat(ok.apply("+1 98765 43210")).as("India only").isFalse();
+        assertThat(ok.apply("+91 58765 43210")).as("mobiles start with 6-9").isFalse();
+        assertThat(ok.apply("+91 98765 4321")).as("10 digits").isFalse();
+
+        AppUser host = organizers.signup("ph-" + run + "@test.local", "P", "x", new OrganizerRequest("Phone Co " + run,
+                "We run intimate live music nights here.", "Pune", "a@b.example", "+919876543210", ""));
+        assertThat(organizers.mine(host.getId()).orElseThrow().contactPhone()).isEqualTo("+91 98765 43210");
+    }
+
+    @Test
+    void customersCantTurnTheirAccountIntoAnOrganizer() {
+        AppUser customer = user("customer", AppUser.Role.USER);
+        assertThatThrownBy(() -> organizers.apply(customer.getId(), profile("Sneaky " + run))).hasMessageContaining("Customer accounts");
     }
 
     @Test
