@@ -7,6 +7,16 @@ import com.seatlock.api.Dtos.UserDto;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Organizer;
 import com.seatlock.domain.OrganizerLogo;
+import com.seatlock.domain.StaffInvite;
+import com.seatlock.domain.Repositories.RefreshTokenRepository;
+import com.seatlock.domain.Repositories.StaffInviteRepository;
+import com.seatlock.api.Dtos.StaffInviteDto;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import java.security.SecureRandom;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.UUID;
 import com.seatlock.domain.Repositories.OrganizerLogoRepository;
 import org.springframework.beans.factory.annotation.Value;
 import com.seatlock.domain.Repositories.OrganizerRepository;
@@ -17,6 +27,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
@@ -32,18 +43,27 @@ public class OrganizerService {
     public record Notice(String to, String subject, String headline, String text, String cta, String path) {}
 
     public static final int MAX_LOGO_BYTES = 1024 * 1024;
+    public static final Duration INVITE_TTL = Duration.ofDays(7);
+    private static final SecureRandom RANDOM = new SecureRandom();
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrganizerService.class);
 
     private final OrganizerRepository organizers;
     private final UserRepository users;
     private final ApplicationEventPublisher publisher;
     private final OrganizerLogoRepository logos;
+    private final StaffInviteRepository invites;
+    private final RefreshTokenRepository refreshTokens;
+    private final PasswordEncoder encoder;
     private final S3ImageStore objectStore;
     private final String objectPublicUrl;
 
     public OrganizerService(OrganizerRepository organizers, UserRepository users, ApplicationEventPublisher publisher,
                             OrganizerLogoRepository logos, S3ImageStore objectStore,
-                            @Value("${app.images.s3.public-url}") String objectPublicUrl) {
+                            @Value("${app.images.s3.public-url}") String objectPublicUrl,
+                            StaffInviteRepository invites, RefreshTokenRepository refreshTokens, PasswordEncoder encoder) {
+        this.invites = invites;
+        this.refreshTokens = refreshTokens;
+        this.encoder = encoder;
         this.logos = logos;
         this.objectStore = objectStore;
         this.objectPublicUrl = objectPublicUrl.replaceAll("/+$", "");
@@ -188,34 +208,113 @@ public class OrganizerService {
         return dto(o, u);
     }
 
+    /** Active staff first, then invites that haven't been used yet (INVITED, or EXPIRED and resendable). */
     @Transactional(readOnly = true)
     public List<StaffDto> staff(Long ownerUserId) {
-        return users.findAllByStaffOfOrderByNameAsc(activeOf(ownerUserId).getId()).stream()
-                .map(u -> new StaffDto(u.getId(), u.getName(), u.getEmail())).toList();
-    }
-
-    /** The person needs a Seatlock account first; they become STAFF and see only the check-in scanner. */
-    @Transactional
-    public StaffDto addStaff(Long ownerUserId, String email) {
         Organizer o = activeOf(ownerUserId);
-        AppUser u = users.findByEmail(email.trim().toLowerCase(Locale.ROOT))
-                .orElseThrow(() -> new IllegalArgumentException("No Seatlock account uses that email. Ask them to sign up first."));
-        if (u.getId().equals(ownerUserId)) throw new IllegalArgumentException("You can already scan your own events");
-        if (u.getRole() != AppUser.Role.USER) throw new IllegalArgumentException("That account is already an organizer, staff member or admin");
-        u.setRole(AppUser.Role.STAFF);
-        u.setStaffOf(o.getId());
-        notice(u, "You're gate staff for " + o.getName(), "You're gate staff for " + o.getName() + ".",
-                "Sign out and back in, then open Check-in to scan tickets for their events.", "Open check-in", "/admin/checkin");
-        return new StaffDto(u.getId(), u.getName(), u.getEmail());
+        List<StaffDto> out = new ArrayList<>(users.findAllByStaffOfOrderByNameAsc(o.getId()).stream()
+                .map(u -> new StaffDto(u.getId(), u.getName(), u.getEmail(), "ACTIVE", null)).toList());
+        invites.findAllByOrganizerIdAndUsedAtIsNullOrderByCreatedAtAsc(o.getId()).forEach(i ->
+                out.add(new StaffDto(i.getId(), i.getName(), i.getEmail(), i.isUsable() ? "INVITED" : "EXPIRED", i.getExpiresAt())));
+        return out;
     }
 
+    /**
+     * Invites someone to be gate staff. Only for emails with no Seatlock account (a customer's or another
+     * organizer's account is never turned into a scanner); the invited person creates their account from the
+     * emailed link and joins this organizer as STAFF. Someone this organizer removed earlier can be invited back.
+     */
+    @Transactional
+    public StaffDto addStaff(Long ownerUserId, String name, String email) {
+        Organizer o = activeOf(ownerUserId);
+        String address = email.trim().toLowerCase(Locale.ROOT);
+        users.findByEmail(address).filter(u -> !isRemovedStaff(u)).ifPresent(u -> {
+            throw new IllegalArgumentException("That email already has a Seatlock account. Invite an email that isn't registered yet.");
+        });
+        invites.deleteByOrganizerIdAndEmailAndUsedAtIsNull(o.getId(), address); // re-inviting replaces the old link
+        StaffInvite i = invite(o, address, name.trim());
+        return new StaffDto(i.getId(), i.getName(), i.getEmail(), "INVITED", i.getExpiresAt());
+    }
+
+    /** A new link for an unused invite; the old link stops working. */
+    @Transactional
+    public void resendInvite(Long ownerUserId, Long inviteId) {
+        Organizer o = activeOf(ownerUserId);
+        StaffInvite old = ownInvite(o, inviteId);
+        invites.delete(old);
+        invite(o, old.getEmail(), old.getName());
+    }
+
+    @Transactional
+    public void cancelInvite(Long ownerUserId, Long inviteId) {
+        invites.delete(ownInvite(activeOf(ownerUserId), inviteId));
+    }
+
+    /** Disables the staff account: no access, signed out everywhere, can't sign in again (until invited back). */
     @Transactional
     public void removeStaff(Long ownerUserId, Long staffUserId) {
         Organizer o = activeOf(ownerUserId);
-        AppUser u = users.findById(staffUserId).filter(x -> o.getId().equals(x.getStaffOf()))
-                .orElseThrow(() -> new NoSuchElementException("Staff member not found"));
-        u.setRole(AppUser.Role.USER);
+        Long id = users.findById(staffUserId).filter(x -> o.getId().equals(x.getStaffOf()))
+                .orElseThrow(() -> new NoSuchElementException("Staff member not found")).getId();
+        refreshTokens.revokeOtherFamilies(id, UUID.randomUUID(), Instant.now()); // clears the persistence context: re-read below
+        AppUser u = users.findById(id).orElseThrow();
         u.setStaffOf(null);
+        u.changePasswordHash(AppUser.NO_PASSWORD);
+    }
+
+    /** Public, for the invite page: who's invited, and by whom. */
+    @Transactional(readOnly = true)
+    public StaffInviteDto inviteInfo(String rawToken) {
+        StaffInvite i = usableInvite(rawToken);
+        return new StaffInviteDto(i.getName(), i.getEmail(), organizers.findById(i.getOrganizerId()).orElseThrow().getName());
+    }
+
+    /** Creates the staff account from the invite (one use) and returns it; the caller signs it in. */
+    @Transactional
+    public AppUser acceptInvite(String rawToken, String name, String password) {
+        StaffInvite i = usableInvite(rawToken);
+        AppUser u = users.findByEmail(i.getEmail()).orElse(null);
+        if (u == null) {
+            u = users.save(new AppUser(i.getEmail(), name.trim(), encoder.encode(password), AppUser.Role.STAFF));
+        } else if (isRemovedStaff(u)) {
+            u.changePasswordHash(encoder.encode(password)); // invited back: reactivate their old staff account
+        } else {
+            throw new IllegalArgumentException("An account with this email already exists. Ask the organizer to invite a different email.");
+        }
+        u.setStaffOf(i.getOrganizerId());
+        i.use();
+        notice(u, "You're gate staff for " + organizers.findById(i.getOrganizerId()).orElseThrow().getName(),
+                "Your staff account is ready.", "Sign in with " + u.getEmail() + " to scan tickets and see the events you work at.",
+                "Open check-in", "/admin/checkin");
+        return u;
+    }
+
+    private static boolean isRemovedStaff(AppUser u) {
+        return u.getRole() == AppUser.Role.STAFF && u.getStaffOf() == null && !u.hasPassword();
+    }
+
+    private StaffInvite usableInvite(String rawToken) {
+        return invites.findByTokenHash(AuthService.hash(rawToken == null ? "" : rawToken))
+                .filter(StaffInvite::isUsable)
+                .filter(i -> organizers.findById(i.getOrganizerId()).map(Organizer::isApproved).orElse(false))
+                .orElseThrow(() -> new NoSuchElementException("This invite link is invalid or has expired. Ask the organizer to send a new one."));
+    }
+
+    private StaffInvite ownInvite(Organizer o, Long inviteId) {
+        return invites.findById(inviteId).filter(i -> o.getId().equals(i.getOrganizerId()) && i.getUsedAt() == null)
+                .orElseThrow(() -> new NoSuchElementException("Invite not found"));
+    }
+
+    private StaffInvite invite(Organizer o, String email, String name) {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String raw = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        StaffInvite i = invites.save(new StaffInvite(o.getId(), email, name, AuthService.hash(raw), Instant.now().plus(INVITE_TTL)));
+        publisher.publishEvent(new Notice(email, "You're invited to join " + o.getName() + " as gate staff",
+                "Join " + o.getName() + " as gate staff.",
+                o.getName() + " invited you to scan tickets at their events on Seatlock. Create your staff account with this link; "
+                        + "it works once and expires in 7 days.", "Create staff account", "/staff/invite?token=" + raw));
+        return i;
     }
 
     /**

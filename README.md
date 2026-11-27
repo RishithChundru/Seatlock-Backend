@@ -205,14 +205,14 @@ Seatlock is a marketplace: outside organizers host their own events.
 |---|---|
 | `ADMIN` (super admin) | Every event; review organizer applications; suspend or reinstate organizers; scan any ticket |
 | `ORGANIZER` | Create, edit and cancel **their own** events, see their sales, add gate staff, scan tickets for their events |
-| `STAFF` | Only the check-in scanner, only for their organizer's events |
+| `STAFF` | Their organizer's dashboard, read-only, and the check-in scanner for that organizer's events |
 | `USER` | Book, pay, cancel, share |
 
 1. **Sign up as an organizer** at `/organizer/signup`, separate from customer sign-up: a 4-step form (account; organisation name, optional logo, city, about; public contact email, Indian mobile number (+91) and website; review and accept the terms). It creates an `ORGANIZER` account and its application together. The profile is shown as **"Hosted by"** on every event they run. Names are unique (case-insensitive). Customer accounts can't become organizers.
 2. **Pending = read-only:** the organizer can sign in and look around their dashboard, but creating events, adding staff and check-in are blocked (in the API, not just the UI) until approved. Every super admin gets a "New organizer request" email linking to the review queue.
 3. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed; approval sends "You're approved".
 4. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
-5. **Staff:** organizers add gate staff by the email of an existing account; staff see only the scanner, and it refuses tickets for anyone else's events.
+5. **Staff:** organizers invite gate staff by name and email. Only emails with **no** Seatlock account can be invited, so a customer's or another organizer's account is never turned into a scanner. No account is created up front: the person gets an emailed link (one use, 7 days; only its hash is stored), creates their staff account there, and is attached to that organizer. Organizers can resend or cancel invites; removing a staff member disables that account (signed out everywhere). Staff see their organizer's dashboard read-only, and the scanner refuses tickets for anyone else's events.
 6. **Suspend:** stops the organizer and their staff at once (their dashboard turns read-only); their events stay on sale and can be cancelled by the super admin.
 
 Ownership is enforced in the service layer (`Access`), from the database rather than the JWT's role claim, so a suspension applies immediately; another organizer's event looks exactly like a missing one (404). The frontend picks up a role change by rotating the session (no sign-out needed). Covered by `OrganizerFlowTest`.
@@ -298,7 +298,9 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
 | POST / DELETE | `/api/organizer/me/logo` (multipart `file`; JPEG/PNG/WebP, 1 MB, magic-byte checked; object storage or Postgres like covers) | ORGANIZER |
 | GET | `/api/organizers/{id}/logo` (versioned URL, cached for a year) | public |
-| GET / POST / DELETE | `/api/organizer/staff[/{id}]`: gate staff | ORGANIZER |
+| GET / POST / DELETE | `/api/organizer/staff[/{id}]`: staff and pending invites; invite `{name, email}`; remove | ORGANIZER |
+| POST / DELETE | `/api/organizer/staff/invites/{id}/resend` · `/api/organizer/staff/invites/{id}` | ORGANIZER |
+| GET / POST | `/api/auth/staff-invite?token=` · `/api/auth/staff-invite/accept {token, name, password}`: create the staff account from an invite | public |
 | GET | `/api/admin/organizers?status=` | ADMIN |
 | POST | `/api/admin/organizers/{id}/approve` · `/reject {note}` · `/suspend {note?}` · `/reinstate` | ADMIN |
 | GET | `/api/account/me`; POST `/api/account/password` `{currentPassword, newPassword}` | USER |

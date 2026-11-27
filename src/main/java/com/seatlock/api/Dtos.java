@@ -56,9 +56,17 @@ public final class Dtos {
 
     public record NoteRequest(@Size(max = 300) String note) {}
 
-    public record StaffRequest(@NotBlank @Email @Size(max = 254) String email) {}
+    /** A new gate staff account: the email must not belong to any existing account. */
+    public record StaffRequest(@NotBlank @Size(max = 60) String name, @NotBlank @Email @Size(max = 254) String email) {}
 
-    public record StaffDto(Long id, String name, String email) {}
+    /** status ACTIVE: id is the staff user's. INVITED / EXPIRED: id is the invite's, inviteExpiresAt set. */
+    public record StaffDto(Long id, String name, String email, String status, Instant inviteExpiresAt) {}
+
+    /** What the invite page shows before the password is set. */
+    public record StaffInviteDto(String name, String email, String organizerName) {}
+
+    public record AcceptInviteRequest(@NotBlank @Size(max = 100) String token, @NotBlank @Size(max = 60) String name,
+                                      @NotBlank @Size(min = 8, max = 72) String password) {}
 
     /** Dashboard row: the event plus its sales so far (confirmed bookings only). */
     public record ManagedEvent(EventDto event, long bookings, long revenueCents, long checkedIn) {}

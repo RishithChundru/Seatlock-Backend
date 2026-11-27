@@ -8,6 +8,9 @@ public class AppUser {
     /** ADMIN is the super admin. ORGANIZER hosts their own events. STAFF scans tickets for one organizer. */
     public enum Role { USER, ADMIN, ORGANIZER, STAFF }
 
+    /** Password hash of an account that can't sign in: a staff invite not yet accepted, or removed staff. */
+    public static final String NO_PASSWORD = "!";
+
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     @Column(nullable = false, unique = true)
@@ -38,6 +41,7 @@ public class AppUser {
 
     public void changePasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
     public Long getStaffOf() { return staffOf; }
+    public boolean hasPassword() { return !NO_PASSWORD.equals(passwordHash); }
     public void setRole(Role role) { this.role = role; }
     public void setStaffOf(Long organizerId) { this.staffOf = organizerId; }
 }

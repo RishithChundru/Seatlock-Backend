@@ -37,6 +37,12 @@ public final class Repositories {
 
     public interface OrganizerLogoRepository extends JpaRepository<OrganizerLogo, Long> {}
 
+    public interface StaffInviteRepository extends JpaRepository<StaffInvite, Long> {
+        Optional<StaffInvite> findByTokenHash(String tokenHash);
+        List<StaffInvite> findAllByOrganizerIdAndUsedAtIsNullOrderByCreatedAtAsc(Long organizerId);
+        void deleteByOrganizerIdAndEmailAndUsedAtIsNull(Long organizerId, String email);
+    }
+
     public interface SeatRepository extends JpaRepository<Seat, Long> {
         List<Seat> findByEventIdOrderByRowLabelAscSeatNumberAsc(Long eventId);
         long countByEventId(Long eventId);

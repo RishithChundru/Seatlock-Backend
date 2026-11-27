@@ -84,6 +84,16 @@ final class Controllers {
             }
         }
 
+        /** Public: the staff invite page shows who's invited before they set a password. */
+        @GetMapping("/staff-invite")
+        StaffInviteDto staffInvite(@RequestParam String token) { return organizers.inviteInfo(token); }
+
+        /** Creates the invited staff account (for the invited email only) and signs it in. */
+        @PostMapping("/staff-invite/accept")
+        ResponseEntity<AuthResponse> acceptStaffInvite(@Valid @RequestBody AcceptInviteRequest r) {
+            return withSession(HttpStatus.CREATED, auth.start(organizers.acceptInvite(r.token(), r.name(), r.password())));
+        }
+
         @PostMapping("/login")
         ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest r) {
             AppUser u = users.findByEmail(r.email().trim().toLowerCase(Locale.ROOT))
@@ -396,7 +406,19 @@ final class Controllers {
         @PostMapping("/staff")
         @ResponseStatus(HttpStatus.CREATED)
         StaffDto addStaff(@AuthenticationPrincipal Jwt user, @Valid @RequestBody StaffRequest r) {
-            return organizers.addStaff(Long.valueOf(user.getSubject()), r.email());
+            return organizers.addStaff(Long.valueOf(user.getSubject()), r.name(), r.email());
+        }
+
+        @PostMapping("/staff/invites/{id}/resend")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void resendInvite(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            organizers.resendInvite(Long.valueOf(user.getSubject()), id);
+        }
+
+        @DeleteMapping("/staff/invites/{id}")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void cancelInvite(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            organizers.cancelInvite(Long.valueOf(user.getSubject()), id);
         }
 
         @DeleteMapping("/staff/{id}")

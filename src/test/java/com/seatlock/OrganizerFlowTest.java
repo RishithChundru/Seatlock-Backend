@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Apply -> review -> host events -> add gate staff -> scan only your own tickets -> suspension. */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
+@org.springframework.test.context.event.RecordApplicationEvents
 class OrganizerFlowTest {
     @Autowired OrganizerService organizers;
     @Autowired Access access;
@@ -36,6 +37,7 @@ class OrganizerFlowTest {
     @Autowired UserRepository users;
     @Autowired SeatRepository seats;
     @Autowired BookingRepository bookingRepo;
+    @Autowired org.springframework.test.context.event.ApplicationEvents published;
     @org.springframework.beans.factory.annotation.Value("${test.mailpit.api}") String mailpitApi;
 
     private final String run = UUID.randomUUID().toString().substring(0, 8);
@@ -52,6 +54,12 @@ class OrganizerFlowTest {
     private EventDto event(Long organizerId) {
         return events.create(new CreateEventRequest("Gig " + UUID.randomUUID(), "Hall, Pune", "Concert",
                 Instant.now().plus(Duration.ofDays(10)), 50000, 1, 3, null), organizerId);
+    }
+
+    /** The raw token from the invite email this test triggered (the API never returns it). */
+    private String inviteToken(String to) {
+        return published.stream(OrganizerService.Notice.class).filter(n -> n.to().equals(to))
+                .map(n -> n.path().substring(n.path().indexOf("token=") + 6)).reduce((a, b) -> b).orElseThrow();
     }
 
     private String ticketFor(Long eventId) throws InterruptedException {
@@ -104,12 +112,24 @@ class OrganizerFlowTest {
         assertThat(access.visibleEvents(host.getId())).extracting(e -> e.getId()).containsExactly(mine.id());
         assertThat(access.visibleEvents(superAdmin.getId())).extracting(e -> e.getId()).contains(mine.id(), platform.id());
 
-        // Gate staff scan this organizer's tickets, and nobody else's.
-        AppUser gate = user("gate", AppUser.Role.USER);
-        organizers.addStaff(host.getId(), gate.getEmail().toUpperCase());
-        assertThat(users.findById(gate.getId()).orElseThrow().getRole()).isEqualTo(AppUser.Role.STAFF);
-        assertThat(organizers.staff(host.getId())).extracting(s -> s.email()).containsExactly(gate.getEmail());
-        assertThatThrownBy(() -> organizers.addStaff(host.getId(), "nobody-" + run + "@test.local")).hasMessageContaining("No Seatlock account");
+        // Gate staff: only emails with no account can be invited; the invite (not an account) is emailed, and the
+        // person creates their staff account from it.
+        String gateEmail = "gate-" + run + "@test.local";
+        organizers.addStaff(host.getId(), "Gate Keeper", gateEmail.toUpperCase());
+        assertThat(users.findByEmail(gateEmail)).as("no account until they accept").isEmpty();
+        assertThat(organizers.staff(host.getId())).singleElement().satisfies(s -> assertThat(s.status()).isEqualTo("INVITED"));
+        assertThatThrownBy(() -> organizers.addStaff(host.getId(), "Taken", user("cust", AppUser.Role.USER).getEmail()))
+                .hasMessageContaining("already has a Seatlock account");
+        assertThatThrownBy(() -> organizers.addStaff(host.getId(), "Taken", superAdmin.getEmail()))
+                .hasMessageContaining("already has a Seatlock account");
+
+        String token = inviteToken(gateEmail);
+        assertThat(organizers.inviteInfo(token).organizerName()).isEqualTo(name);
+        AppUser gate = organizers.acceptInvite(token, "Gate Keeper", "gate-password-1");
+        assertThat(gate.getRole()).isEqualTo(AppUser.Role.STAFF);
+        assertThat(gate.getStaffOf()).isEqualTo(applied.id());
+        assertThat(organizers.staff(host.getId())).singleElement().satisfies(s -> assertThat(s.status()).isEqualTo("ACTIVE"));
+        assertThatThrownBy(() -> organizers.acceptInvite(token, "Again", "another-pass")).hasMessageContaining("invalid or has expired");
 
         String own = ticketFor(mine.id());
         String other = ticketFor(platform.id());
@@ -133,9 +153,14 @@ class OrganizerFlowTest {
         organizers.reinstate(applied.id());
         access.requireManage(host.getId(), mine.id());
 
-        // Removing staff takes their access away.
+        // Removing staff disables the account; re-adding the same email sends a fresh invite to that account.
         organizers.removeStaff(host.getId(), gate.getId());
-        assertThat(users.findById(gate.getId()).orElseThrow().getRole()).isEqualTo(AppUser.Role.USER);
+        AppUser removed = users.findById(gate.getId()).orElseThrow();
+        assertThat(removed.getStaffOf()).isNull();
+        assertThat(removed.hasPassword()).as("can't sign in").isFalse();
+        organizers.addStaff(host.getId(), "Gate Keeper", gateEmail);
+        organizers.acceptInvite(inviteToken(gateEmail), "Gate Keeper", "gate-password-2");
+        assertThat(users.findById(gate.getId()).orElseThrow().getStaffOf()).as("same account, reactivated").isEqualTo(applied.id());
     }
 
     @Test
