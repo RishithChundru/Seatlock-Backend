@@ -53,6 +53,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(a -> a
                 // /error is public so a server error is reported as itself, not masked as a 401
                 .requestMatchers("/api/auth/**", "/actuator/health", "/error").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/payments/webhook").permitAll() // verified by HMAC signature
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 // Prometheus scrapes with HTTP Basic (user "prometheus", password METRICS_TOKEN); closed if unset.
                 .requestMatchers("/actuator/prometheus").access((auth, ctx) ->

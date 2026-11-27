@@ -112,6 +112,20 @@ public class SeatHoldService {
         return out;
     }
 
+    public static class HoldExpiredException extends RuntimeException {
+        public HoldExpiredException() { super("Your hold on these seats ran out. Pick them again to pay."); }
+    }
+
+    private static final RedisScript<Long> EXTEND_IF_OWNER = RedisScript.of(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end", Long.class);
+
+    /** Keeps the user's holds alive while they pay. Every seat must still be held by them. */
+    public void extend(Long userId, List<Long> seatIds, Duration ttl) {
+        for (Long id : seatIds)
+            if (!Long.valueOf(1).equals(redis.execute(EXTEND_IF_OWNER, List.of(key(id)), userId.toString(), String.valueOf(ttl.toMillis()))))
+                throw new HoldExpiredException();
+    }
+
     /** Booking is allowed only for seats that are free or held by this user. */
     public void assertBookable(Long userId, List<Long> seatIds) {
         if (holders(seatIds).values().stream().anyMatch(h -> !h.equals(userId)))

@@ -69,6 +69,17 @@ public final class Dtos {
     /** Published to RabbitMQ after a booking commits. */
     public record BookingConfirmed(Long bookingId, String email, String eventTitle, List<String> seats) {}
 
+    /** Either booking (done: payments off, or a free order) or a Razorpay order to open in Checkout. */
+    public record CheckoutResponse(BookingDto booking, String orderId, Integer amountCents, String currency, String keyId) {
+        public static CheckoutResponse booked(BookingDto b) { return new CheckoutResponse(b, null, null, null, null); }
+        public static CheckoutResponse order(String orderId, int amountCents, String keyId) {
+            return new CheckoutResponse(null, orderId, amountCents, "INR", keyId);
+        }
+    }
+
+    public record VerifyPaymentRequest(@NotBlank @Size(max = 40) String orderId, @NotBlank @Size(max = 40) String paymentId,
+                                       @NotBlank @Size(max = 128) String signature) {}
+
     public record BookingRequest(@NotNull Long eventId, @NotEmpty @Size(max = 10) List<@NotNull Long> seatIds) {}
 
     public record CreateEventRequest(@NotBlank String title, @NotBlank String venue, @NotBlank String category,

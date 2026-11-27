@@ -5,6 +5,7 @@ import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.UserRepository;
 import com.seatlock.service.AuthService;
 import com.seatlock.service.BookingService;
+import com.seatlock.service.PaymentService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import com.seatlock.service.EventSearch;
@@ -227,17 +228,50 @@ final class Controllers {
     }
 
     @RestController
+    @RequestMapping("/api/payments")
+    static class PaymentController {
+        private final PaymentService payments;
+
+        PaymentController(PaymentService payments) { this.payments = payments; }
+
+        /** Start paying for held seats. Returns a booking straight away when payments are off or the order is free. */
+        @PostMapping("/checkout")
+        CheckoutResponse checkout(@AuthenticationPrincipal Jwt user, @Valid @RequestBody BookingRequest r,
+                                  @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+            if (key != null && key.length() > 100) throw new IllegalArgumentException("Idempotency-Key too long");
+            return payments.checkout(Long.valueOf(user.getSubject()), r.eventId(), r.seatIds(), key);
+        }
+
+        @PostMapping("/verify")
+        BookingDto verify(@AuthenticationPrincipal Jwt user, @Valid @RequestBody VerifyPaymentRequest r) {
+            return payments.verify(Long.valueOf(user.getSubject()), r.orderId(), r.paymentId(), r.signature());
+        }
+
+        /** Razorpay -> us. Public: trust comes from the HMAC signature over the raw body. */
+        @PostMapping("/webhook")
+        void webhook(@RequestBody String body, @RequestHeader(value = "X-Razorpay-Signature", required = false) String signature) {
+            payments.webhook(body, signature);
+        }
+    }
+
+    @RestController
     @RequestMapping("/api/bookings")
     static class BookingController {
         private final BookingService bookings;
+        private final PaymentService payments;
 
-        BookingController(BookingService bookings) { this.bookings = bookings; }
+        BookingController(BookingService bookings, PaymentService payments) {
+            this.bookings = bookings;
+            this.payments = payments;
+        }
 
         @PostMapping
         @ResponseStatus(HttpStatus.CREATED)
         BookingDto book(@AuthenticationPrincipal Jwt user, @Valid @RequestBody BookingRequest r,
                         @RequestHeader(value = "Idempotency-Key", required = false) String key) {
             if (key != null && key.length() > 100) throw new IllegalArgumentException("Idempotency-Key too long");
+            // With payments on, seats are only booked after a verified payment (/api/payments/checkout).
+            if (payments.enabled()) throw new IllegalArgumentException("Payment is required: use /api/payments/checkout");
             return bookings.book(Long.valueOf(user.getSubject()), r.eventId(), r.seatIds(), key);
         }
 
