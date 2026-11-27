@@ -69,7 +69,7 @@ public class BookingService {
         }
         if (new HashSet<>(seatIds).size() != seatIds.size()) throw new IllegalArgumentException("Duplicate seats in request");
 
-        Event event = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event event = events.live(eventId);
         AppUser user = users.findById(userId).orElseThrow(() -> new NoSuchElementException("User not found"));
         List<Seat> selected = seats.findAllById(seatIds);
         if (selected.size() != seatIds.size() || selected.stream().anyMatch(s -> !s.getEvent().getId().equals(eventId)))

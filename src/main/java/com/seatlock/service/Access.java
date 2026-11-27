@@ -57,7 +57,7 @@ public class Access {
 
     /** Create/edit/cancel. Someone else's event looks exactly like a missing one. */
     public void requireManage(Long userId, Long eventId) {
-        Event e = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event e = events.live(eventId);
         AppUser u = user(userId);
         if (u.getRole() == AppUser.Role.ADMIN) return;
         Organizer o = u.getRole() == AppUser.Role.ORGANIZER ? activeOrganizer(u) : null;
@@ -74,8 +74,8 @@ public class Access {
     /** The events this user's dashboard and scanner show. */
     public List<Event> visibleEvents(Long userId) {
         AppUser u = user(userId);
-        if (u.getRole() == AppUser.Role.ADMIN) return events.findAllByOrderByStartsAtAsc();
+        if (u.getRole() == AppUser.Role.ADMIN) return events.findAllByCancelledAtIsNullOrderByStartsAtAsc();
         Organizer o = activeOrganizer(u);
-        return o == null ? List.of() : events.findAllByOrganizerIdOrderByStartsAtAsc(o.getId());
+        return o == null ? List.of() : events.findAllByOrganizerIdAndCancelledAtIsNullOrderByStartsAtAsc(o.getId());
     }
 }

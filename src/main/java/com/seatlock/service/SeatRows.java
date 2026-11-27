@@ -10,7 +10,6 @@ import org.springframework.stereotype.Service;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.NoSuchElementException;
 
 /**
  * The database half of a seat map (which seats exist and which are sold), cached in Redis.
@@ -35,7 +34,7 @@ public class SeatRows {
 
     @Cacheable(value = CACHE, sync = true)
     public List<SeatRow> forEvent(Long eventId) {
-        Event event = events.findById(eventId).orElseThrow(() -> new NoSuchElementException("Event not found"));
+        Event event = events.live(eventId);
         List<SeatRow> rows = new ArrayList<>();
         for (Seat s : seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(eventId))
             rows.add(new SeatRow(s.getId(), s.getRowLabel(), s.getSeatNumber(), s.getStatus() == Seat.Status.BOOKED,

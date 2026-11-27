@@ -29,8 +29,13 @@ public final class Repositories {
     }
 
     public interface EventRepository extends JpaRepository<Event, Long> {
-        List<Event> findAllByOrderByStartsAtAsc();
-        List<Event> findAllByOrganizerIdOrderByStartsAtAsc(Long organizerId);
+        List<Event> findAllByCancelledAtIsNullOrderByStartsAtAsc();
+        List<Event> findAllByOrganizerIdAndCancelledAtIsNullOrderByStartsAtAsc(Long organizerId);
+
+        /** An event that can still be shown, booked or managed: cancelled ones read as not found. */
+        default Event live(Long id) {
+            return findById(id).filter(e -> !e.isCancelled()).orElseThrow(() -> new java.util.NoSuchElementException("Event not found"));
+        }
     }
 
     public interface EventImageRepository extends JpaRepository<EventImage, Long> {}
