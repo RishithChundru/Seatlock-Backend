@@ -198,6 +198,21 @@ class Tier2FeaturesTest {
     }
 
     @Test
+    void aCheckedInTicketCantBeSharedAndItsLinkStopsShowingTheCode() throws Exception {
+        EventDto ev = event("Used " + run, "Hall, Goa", "Concert", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
+        AppUser fan = user("usedfan");
+        var booking = bookings.book(fan.getId(), ev.id(), List.of(seatsOf(ev.id()).get(0).getId()), null);
+        String code = ticketCode(booking.id());
+        String token = bookings.share(fan.getId(), booking.id()); // shared before the show
+
+        bookings.checkIn(code, ev.id());
+        assertThatThrownBy(() -> bookings.share(fan.getId(), booking.id())).hasMessageContaining("already been used");
+        var shared = bookings.sharedTicket(token);
+        assertThat(shared.ticketCode()).isNull();
+        assertThat(shared.checkedInAt()).isNotNull();
+    }
+
+    @Test
     void ticketEmailArrivesInTheInbox() throws Exception {
         EventDto ev = event("Mail", "Hall, Goa", "Concert", 1000, Instant.now().plus(Duration.ofDays(5)), 1, null, null);
         AppUser fan = user("mailfan");

@@ -160,6 +160,7 @@ public class BookingService {
         Booking b = bookings.findById(bookingId).filter(x -> x.getUser().getId().equals(userId))
                 .orElseThrow(() -> new NoSuchElementException("Booking not found"));
         if (b.isCancelled()) throw new IllegalArgumentException("This booking was cancelled");
+        if (b.getCheckedInAt() != null) throw new IllegalArgumentException("This ticket has already been used at the gate");
         return b.shareToken();
     }
 
@@ -170,7 +171,8 @@ public class BookingService {
         Event e = b.getEvent();
         String firstName = b.getUser().getName().trim().split("\\s+")[0];
         return new SharedTicket(e.getId(), e.getTitle(), e.getVenue(), e.getStartsAt(), b.seatLabels(),
-                b.isCancelled() ? null : b.getTicketCode(), b.getStatus().name(), b.getCheckedInAt(), firstName);
+                b.isCancelled() || b.getCheckedInAt() != null ? null : b.getTicketCode(), // used or void: nothing to scan
+                b.getStatus().name(), b.getCheckedInAt(), firstName);
     }
 
     @Transactional(readOnly = true)

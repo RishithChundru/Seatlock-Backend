@@ -47,7 +47,7 @@ public final class Dtos {
 
     public record ShareResponse(String token) {}
 
-    /** What anyone with the share link sees: no email, no price, no booking id. ticketCode is null once cancelled. */
+    /** What anyone with the share link sees: no email, no price, no booking id. ticketCode is null once cancelled or used. */
     public record SharedTicket(Long eventId, String eventTitle, String venue, Instant startsAt, List<String> seats,
                                String ticketCode, String status, Instant checkedInAt, String sharedBy) {}
 
