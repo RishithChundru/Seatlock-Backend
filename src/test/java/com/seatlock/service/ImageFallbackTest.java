@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -21,7 +20,7 @@ class ImageFallbackTest {
         var images = mock(EventImageRepository.class);
         var store = mock(S3ImageStore.class);
         var event = new Event("Show", "Hall, Pune", "Concert", Instant.now().plusSeconds(86400), 50000, null);
-        when(events.findById(7L)).thenReturn(Optional.of(event));
+        when(events.live(7L)).thenReturn(event);
         when(store.isEnabled()).thenReturn(true);
         when(store.put(any(), any(), any())).thenThrow(new RuntimeException("503 Service Unavailable"));
 
