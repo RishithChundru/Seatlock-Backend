@@ -103,7 +103,7 @@ public class Mailer {
         String rest = split < 0 ? "" : body.substring(split);
         return "<!doctype html><html><body style=\"margin:0;background:#E0F7FA;font-family:Arial,Helvetica,sans-serif;color:#212121\">"
                 + "<div style=\"max-width:520px;margin:0 auto;padding:32px 20px\">"
-                + "<p style=\"margin:0 0 24px;font:800 20px Arial,Helvetica,sans-serif;letter-spacing:-0.02em\">Seat<span style=\"color:#C23A2E\">lock</span></p>"
+                + "<p style=\"margin:0 0 24px;font:800 20px Arial,Helvetica,sans-serif;letter-spacing:-0.02em\">Seat<span style=\"color:#FF6F61\">lock</span></p>"
                 + "<div style=\"background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:28px\">"
                 + "<h1 style=\"margin:0 0 20px;font:700 22px/1.3 Arial,Helvetica,sans-serif;letter-spacing:-0.01em\">" + headline + "</h1>"
                 + "<table style=\"border-collapse:collapse\">" + table + "</table>" + rest
