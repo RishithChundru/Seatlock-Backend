@@ -6,6 +6,7 @@ import com.seatlock.api.Dtos.SharedTicket;
 import com.seatlock.api.Dtos.Insights;
 import com.seatlock.api.Dtos.RecentBooking;
 import com.seatlock.api.Dtos.WeekPoint;
+import com.seatlock.api.Dtos.AttendeeDto;
 import java.util.Locale;
 import com.seatlock.domain.*;
 import com.seatlock.domain.Repositories.*;
@@ -219,6 +220,13 @@ public class BookingService {
         List<WeekPoint> weeks = new java.util.ArrayList<>();
         for (int i = 0; i < WEEKS; i++) weeks.add(new WeekPoint(first.plusWeeks(i), count[i], revenue[i]));
         return new Insights(weeks, recent);
+    }
+
+    /** Everyone who booked this event, newest first (the caller checks the viewer may see it). */
+    @Transactional(readOnly = true)
+    public List<AttendeeDto> attendees(Long eventId) {
+        return bookings.findByEventIdOrderByCreatedAtDesc(eventId).stream().map(b -> new AttendeeDto(b.getId(), b.getUser().getName(),
+                b.getUser().getEmail(), b.seatLabels(), b.getTotalCents(), b.getStatus().name(), b.getCreatedAt(), b.getCheckedInAt())).toList();
     }
 
     @Transactional(readOnly = true)

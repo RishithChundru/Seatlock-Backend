@@ -23,6 +23,7 @@ public class StaffInvite {
     @Column(nullable = false)
     private Instant expiresAt;
     private Instant usedAt;
+    private Instant declinedAt;
 
     protected StaffInvite() {}
 
@@ -34,7 +35,9 @@ public class StaffInvite {
         this.expiresAt = expiresAt;
     }
 
-    public boolean isUsable() { return usedAt == null && expiresAt.isAfter(Instant.now()); }
+    public boolean isUsable() { return usedAt == null && declinedAt == null && expiresAt.isAfter(Instant.now()); }
+    public void decline() { this.declinedAt = Instant.now(); }
+    public Instant getDeclinedAt() { return declinedAt; }
     public void use() { this.usedAt = Instant.now(); }
     public Long getId() { return id; }
     public Long getOrganizerId() { return organizerId; }

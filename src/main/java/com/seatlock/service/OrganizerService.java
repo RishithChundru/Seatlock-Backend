@@ -11,6 +11,7 @@ import com.seatlock.domain.StaffInvite;
 import com.seatlock.domain.Repositories.RefreshTokenRepository;
 import com.seatlock.domain.Repositories.StaffInviteRepository;
 import com.seatlock.api.Dtos.StaffInviteDto;
+import com.seatlock.api.Dtos.PendingInviteDto;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -218,7 +219,8 @@ public class OrganizerService {
         List<StaffDto> out = new ArrayList<>(users.findAllByStaffOfOrderByNameAsc(o.getId()).stream()
                 .map(u -> new StaffDto(u.getId(), u.getName(), u.getEmail(), "ACTIVE", null)).toList());
         invites.findAllByOrganizerIdAndUsedAtIsNullOrderByCreatedAtAsc(o.getId()).forEach(i ->
-                out.add(new StaffDto(i.getId(), i.getName(), i.getEmail(), i.isUsable() ? "INVITED" : "EXPIRED", i.getExpiresAt())));
+                out.add(new StaffDto(i.getId(), i.getName(), i.getEmail(),
+                        i.getDeclinedAt() != null ? "DECLINED" : i.isUsable() ? "INVITED" : "EXPIRED", i.getExpiresAt())));
         return out;
     }
 
@@ -282,7 +284,7 @@ public class OrganizerService {
         } else if (isRemovedStaff(u)) {
             u.changePasswordHash(encoder.encode(password)); // invited back: reactivate their old staff account
         } else {
-            throw new IllegalArgumentException("An account with this email already exists. Ask the organizer to invite a different email.");
+            throw new IllegalArgumentException("You already have an account with this email. Sign in and accept the invite from your account.");
         }
         u.setStaffOf(i.getOrganizerId());
         i.use();
@@ -290,6 +292,45 @@ public class OrganizerService {
                 "Your staff account is ready.", "Sign in with " + u.getEmail() + " to scan tickets and see the events you work at.",
                 "Open check-in", "/admin/checkin");
         return u;
+    }
+
+    /** Invites for the signed-in customer's email, so they can accept or decline in the app (no email needed). */
+    @Transactional(readOnly = true)
+    public List<PendingInviteDto> pendingInvites(Long userId) {
+        AppUser u = users.findById(userId).orElseThrow();
+        if (u.getRole() != AppUser.Role.USER) return List.of();
+        return invites.findAllByEmailAndUsedAtIsNullAndDeclinedAtIsNullOrderByCreatedAtDesc(u.getEmail()).stream()
+                .filter(StaffInvite::isUsable)
+                .flatMap(i -> organizers.findById(i.getOrganizerId()).filter(Organizer::isApproved).stream()
+                        .map(o -> new PendingInviteDto(i.getId(), o.getName(), i.getExpiresAt())))
+                .toList();
+    }
+
+    /** The customer joins the organizer as gate staff; their account becomes a STAFF account. */
+    @Transactional
+    public AppUser acceptInviteInApp(Long userId, Long inviteId) {
+        AppUser u = users.findById(userId).orElseThrow();
+        StaffInvite i = inviteFor(u, inviteId);
+        if (u.getRole() != AppUser.Role.USER) throw new IllegalArgumentException("Only a customer account can join as gate staff");
+        u.setRole(AppUser.Role.STAFF);
+        u.setStaffOf(i.getOrganizerId());
+        i.use();
+        notice(u, "You're gate staff for " + organizers.findById(i.getOrganizerId()).orElseThrow().getName(),
+                "You joined as gate staff.", "You can now scan tickets and see the events you work at.", "Open check-in", "/admin/checkin");
+        return u;
+    }
+
+    /** The customer says no: the account stays as it is and the organizer sees the invite as declined. */
+    @Transactional
+    public void declineInviteInApp(Long userId, Long inviteId) {
+        inviteFor(users.findById(userId).orElseThrow(), inviteId).decline();
+    }
+
+    private StaffInvite inviteFor(AppUser u, Long inviteId) {
+        return invites.findById(inviteId)
+                .filter(i -> i.isUsable() && i.getEmail().equalsIgnoreCase(u.getEmail()))
+                .filter(i -> organizers.findById(i.getOrganizerId()).map(Organizer::isApproved).orElse(false))
+                .orElseThrow(() -> new NoSuchElementException("This invite is no longer available"));
     }
 
     private static boolean isRemovedStaff(AppUser u) {

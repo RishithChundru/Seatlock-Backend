@@ -4,6 +4,7 @@ import com.seatlock.api.Dtos.*;
 import com.seatlock.domain.AppUser;
 import com.seatlock.domain.Repositories.UserRepository;
 import com.seatlock.service.AuthService;
+import com.seatlock.service.AvatarService;
 import com.seatlock.service.Access;
 import com.seatlock.service.BookingService;
 import com.seatlock.service.OrganizerService;
@@ -283,6 +284,13 @@ final class Controllers {
             return payments.checkout(Long.valueOf(user.getSubject()), r.eventId(), r.seatIds(), key);
         }
 
+        /** Closed or failed the payment: release the held seats right away. */
+        @PostMapping("/{orderId}/cancel")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void cancel(@AuthenticationPrincipal Jwt user, @PathVariable String orderId) {
+            payments.cancel(Long.valueOf(user.getSubject()), orderId);
+        }
+
         @PostMapping("/verify")
         BookingDto verify(@AuthenticationPrincipal Jwt user, @Valid @RequestBody VerifyPaymentRequest r) {
             return payments.verify(Long.valueOf(user.getSubject()), r.orderId(), r.paymentId(), r.signature());
@@ -365,9 +373,21 @@ final class Controllers {
         }
 
         /** Weekly sales (last 8 weeks) and latest bookings, scoped like /events. */
+        /** scope (super admin): "own" = Seatlock-hosted events, "organizers" = everyone else's; omitted = all. */
         @GetMapping("/insights")
-        Insights insights(@AuthenticationPrincipal Jwt user) {
-            return bookings.insights(access.visibleEvents(Long.valueOf(user.getSubject())));
+        Insights insights(@AuthenticationPrincipal Jwt user, @RequestParam(required = false) String scope) {
+            var visible = access.visibleEvents(Long.valueOf(user.getSubject()));
+            if ("own".equals(scope)) visible = visible.stream().filter(e -> e.getOrganizerId() == null).toList();
+            else if ("organizers".equals(scope)) visible = visible.stream().filter(e -> e.getOrganizerId() != null).toList();
+            return bookings.insights(visible);
+        }
+
+        /** Who booked one event. Same visibility as the dashboard: someone else's event reads as not found. */
+        @GetMapping("/events/{id}/bookings")
+        List<AttendeeDto> attendees(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            if (access.visibleEvents(Long.valueOf(user.getSubject())).stream().noneMatch(e -> e.getId().equals(id)))
+                throw new java.util.NoSuchElementException("Event not found");
+            return bookings.attendees(id);
         }
 
         /** Gate check-in: scan or type the ticket code. */
@@ -484,9 +504,11 @@ final class Controllers {
         private final AuthService auth;
 
         private final OrganizerService organizers;
+        private final AvatarService avatars;
 
-        AccountController(UserRepository users, PasswordEncoder encoder, AuthService auth, OrganizerService organizers) {
+        AccountController(UserRepository users, PasswordEncoder encoder, AuthService auth, OrganizerService organizers, AvatarService avatars) {
             this.organizers = organizers;
+            this.avatars = avatars;
             this.users = users;
             this.encoder = encoder;
             this.auth = auth;
@@ -495,6 +517,34 @@ final class Controllers {
         @GetMapping("/me")
         UserDto me(@AuthenticationPrincipal Jwt user) {
             return organizers.userDto(users.findById(Long.valueOf(user.getSubject())).orElseThrow());
+        }
+
+        @PostMapping(value = "/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+        UserDto setAvatar(@AuthenticationPrincipal Jwt user, @RequestParam("file") MultipartFile file) throws IOException {
+            return organizers.userDto(avatars.set(Long.valueOf(user.getSubject()), file.getBytes()));
+        }
+
+        @DeleteMapping("/avatar")
+        UserDto removeAvatar(@AuthenticationPrincipal Jwt user) {
+            return organizers.userDto(avatars.remove(Long.valueOf(user.getSubject())));
+        }
+
+        /** Staff invites for this customer's email, to accept or decline in the app. */
+        @GetMapping("/invites")
+        List<PendingInviteDto> invites(@AuthenticationPrincipal Jwt user) {
+            return organizers.pendingInvites(Long.valueOf(user.getSubject()));
+        }
+
+        /** Joins as gate staff. The client refreshes its session afterwards so the new role takes effect. */
+        @PostMapping("/invites/{id}/accept")
+        UserDto acceptInvite(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            return organizers.userDto(organizers.acceptInviteInApp(Long.valueOf(user.getSubject()), id));
+        }
+
+        @PostMapping("/invites/{id}/decline")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        void declineInvite(@AuthenticationPrincipal Jwt user, @PathVariable Long id) {
+            organizers.declineInviteInApp(Long.valueOf(user.getSubject()), id);
         }
 
         /**
@@ -513,6 +563,23 @@ final class Controllers {
             u.changePasswordHash(encoder.encode(r.newPassword()));
             users.save(u);
             auth.endOtherSessions(u.getId(), refresh);
+        }
+    }
+
+    /** Profile photos. Signed-in users only (anyRequest().authenticated()); same-origin img tags send the cookie. */
+    @RestController
+    @RequestMapping("/api/users")
+    static class UserAvatarController {
+        private final AvatarService avatars;
+
+        UserAvatarController(AvatarService avatars) { this.avatars = avatars; }
+
+        @GetMapping("/{id}/avatar")
+        ResponseEntity<byte[]> avatar(@PathVariable Long id) {
+            var a = avatars.get(id);
+            return ResponseEntity.ok().contentType(MediaType.parseMediaType(a.getContentType()))
+                    .cacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePrivate().immutable()) // URL is versioned
+                    .body(a.getData());
         }
     }
 
