@@ -2,6 +2,8 @@ package com.seatlock.domain;
 
 import jakarta.persistence.*;
 
+import java.time.Instant;
+
 @Entity
 @Table(name = "users")
 public class AppUser {
@@ -23,6 +25,8 @@ public class AppUser {
     private Role role;
     /** For STAFF: the organizer they work for. */
     private Long staffOf;
+    /** Set while the user has a profile photo (also busts the image cache). */
+    private Instant avatarUpdatedAt;
 
     protected AppUser() {}
 
@@ -44,4 +48,6 @@ public class AppUser {
     public boolean hasPassword() { return !NO_PASSWORD.equals(passwordHash); }
     public void setRole(Role role) { this.role = role; }
     public void setStaffOf(Long organizerId) { this.staffOf = organizerId; }
+    public Instant getAvatarUpdatedAt() { return avatarUpdatedAt; }
+    public void setAvatarUpdatedAt(Instant at) { this.avatarUpdatedAt = at; }
 }

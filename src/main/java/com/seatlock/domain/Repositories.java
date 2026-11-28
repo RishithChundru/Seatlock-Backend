@@ -42,9 +42,12 @@ public final class Repositories {
 
     public interface OrganizerLogoRepository extends JpaRepository<OrganizerLogo, Long> {}
 
+    public interface UserAvatarRepository extends JpaRepository<UserAvatar, Long> {}
+
     public interface StaffInviteRepository extends JpaRepository<StaffInvite, Long> {
         Optional<StaffInvite> findByTokenHash(String tokenHash);
         List<StaffInvite> findAllByOrganizerIdAndUsedAtIsNullOrderByCreatedAtAsc(Long organizerId);
+        List<StaffInvite> findAllByEmailAndUsedAtIsNullAndDeclinedAtIsNullOrderByCreatedAtDesc(String email);
         void deleteByOrganizerIdAndEmailAndUsedAtIsNull(Long organizerId, String email);
     }
 
@@ -80,6 +83,7 @@ public final class Repositories {
 
     public interface BookingRepository extends JpaRepository<Booking, Long> {
         List<Booking> findByUserIdOrderByCreatedAtDesc(Long userId);
+        List<Booking> findByEventIdOrderByCreatedAtDesc(Long eventId);
         Optional<Booking> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
         List<Booking> findTop100ByTicketIssuedAtIsNullAndCreatedAtBefore(Instant cutoff);
         Optional<Booking> findByTicketCode(String ticketCode);

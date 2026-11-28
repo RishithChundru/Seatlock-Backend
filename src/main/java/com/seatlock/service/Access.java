@@ -64,9 +64,10 @@ public class Access {
         if (o == null || !Objects.equals(o.getId(), e.getOrganizerId())) throw new NoSuchElementException("Event not found");
     }
 
+    /** The super admin scans only Seatlock's own events; organizer events are their staff's job (and revenue). */
     public boolean canScan(Long userId, Event e) {
         AppUser u = user(userId);
-        if (u.getRole() == AppUser.Role.ADMIN) return true;
+        if (u.getRole() == AppUser.Role.ADMIN) return e.getOrganizerId() == null;
         Organizer o = activeOrganizer(u);
         return o != null && Objects.equals(o.getId(), e.getOrganizerId());
     }

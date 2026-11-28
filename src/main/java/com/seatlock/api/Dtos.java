@@ -13,10 +13,12 @@ public final class Dtos {
     private Dtos() {}
 
     /** organizerStatus: for ORGANIZER accounts, PENDING / APPROVED / REJECTED / SUSPENDED (else null). */
-    public record UserDto(Long id, String email, String name, String role, String organizerStatus) {
+    /** avatarUrl: same-origin photo URL (versioned, so a new photo is never served from cache), or null. */
+    public record UserDto(Long id, String email, String name, String role, String organizerStatus, String avatarUrl) {
         public static UserDto of(AppUser u) { return of(u, null); }
         public static UserDto of(AppUser u, String organizerStatus) {
-            return new UserDto(u.getId(), u.getEmail(), u.getName(), u.getRole().name(), organizerStatus);
+            return new UserDto(u.getId(), u.getEmail(), u.getName(), u.getRole().name(), organizerStatus,
+                    u.getAvatarUpdatedAt() == null ? null : "/api/users/" + u.getId() + "/avatar?v=" + u.getAvatarUpdatedAt().toEpochMilli());
         }
     }
 
@@ -62,6 +64,13 @@ public final class Dtos {
 
     /** status ACTIVE: id is the staff user's. INVITED / EXPIRED: id is the invite's, inviteExpiresAt set. */
     public record StaffDto(Long id, String name, String email, String status, Instant inviteExpiresAt) {}
+
+    /** A staff invite waiting for the signed-in customer to accept or decline. */
+    public record PendingInviteDto(Long id, String organizerName, Instant expiresAt) {}
+
+    /** Who booked an event, for its organizer and the super admin. No ticket code: that would let anyone holding the list in. */
+    public record AttendeeDto(Long id, String name, String email, List<String> seats, int totalCents, String status,
+                              Instant createdAt, Instant checkedInAt) {}
 
     /** What the invite page shows before the password is set. */
     public record StaffInviteDto(String name, String email, String organizerName) {}

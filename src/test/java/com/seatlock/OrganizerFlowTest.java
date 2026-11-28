@@ -136,6 +136,8 @@ class OrganizerFlowTest {
         assertThat(bookings.checkIn(own, null, gate.getId()).result()).isEqualTo("ADMITTED");
         assertThatThrownBy(() -> bookings.checkIn(other, null, gate.getId())).hasMessageContaining("isn't for one of your events");
         assertThatThrownBy(() -> bookings.checkIn(other, null, host.getId())).hasMessageContaining("isn't for one of your events");
+        // The super admin scans Seatlock's own events only, not an organizer's (that's their staff's job).
+        assertThatThrownBy(() -> bookings.checkIn(own, null, superAdmin.getId())).hasMessageContaining("isn't for one of your events");
         assertThat(bookings.checkIn(other, null, superAdmin.getId()).result()).isEqualTo("ADMITTED");
 
         // Dashboard chart: 8 weeks, this week holds the booking; latest bookings show who booked what.
@@ -172,6 +174,42 @@ class OrganizerFlowTest {
         organizers.addStaff(host.getId(), "Gate Keeper", gateEmail);
         organizers.acceptInvite(inviteToken(gateEmail), "Gate Keeper", "gate-password-2");
         assertThat(users.findById(gate.getId()).orElseThrow().getStaffOf()).as("same account, reactivated").isEqualTo(applied.id());
+    }
+
+    @Test
+    void anInvitedCustomerAcceptsOrDeclinesInTheAppAndOrganizersSeeWhoBooked() throws Exception {
+        AppUser host = organizers.signup("inv-host-" + run + "@test.local", "Host", "x", profile("Inviters " + run));
+        organizers.approve(organizers.mine(host.getId()).orElseThrow().id());
+
+        // Invite goes out to unregistered emails; the people then sign up as customers and see it in the app.
+        String yes = "yes-" + run + "@test.local", no = "no-" + run + "@test.local";
+        organizers.addStaff(host.getId(), "Yes", yes);
+        organizers.addStaff(host.getId(), "No", no);
+        AppUser joiner = users.save(new AppUser(yes, "Yes", "x", AppUser.Role.USER));
+        AppUser decliner = users.save(new AppUser(no, "No", "x", AppUser.Role.USER));
+        assertThat(organizers.pendingInvites(joiner.getId())).singleElement()
+                .satisfies(i -> assertThat(i.organizerName()).isEqualTo("Inviters " + run));
+
+        Long noInvite = organizers.pendingInvites(decliner.getId()).getFirst().id();
+        assertThatThrownBy(() -> organizers.acceptInviteInApp(joiner.getId(), noInvite)).isInstanceOf(java.util.NoSuchElementException.class);
+        organizers.declineInviteInApp(decliner.getId(), noInvite);
+        assertThat(users.findById(decliner.getId()).orElseThrow().getRole()).isEqualTo(AppUser.Role.USER);
+        assertThat(organizers.pendingInvites(decliner.getId())).isEmpty();
+
+        AppUser staff = organizers.acceptInviteInApp(joiner.getId(), organizers.pendingInvites(joiner.getId()).getFirst().id());
+        assertThat(staff.getRole()).isEqualTo(AppUser.Role.STAFF);
+        assertThat(staff.getStaffOf()).isEqualTo(access.organizerForNewEvent(host.getId()));
+        assertThat(organizers.staff(host.getId())).extracting(s -> s.email() + ":" + s.status())
+                .contains(yes + ":ACTIVE", no + ":DECLINED");
+
+        // The organizer sees who booked their event, without the ticket code.
+        EventDto ev = event(access.organizerForNewEvent(host.getId()));
+        AppUser fan = user("fan", AppUser.Role.USER);
+        bookings.book(fan.getId(), ev.id(), List.of(seats.findByEventIdOrderByRowLabelAscSeatNumberAsc(ev.id()).getFirst().getId()), null);
+        assertThat(bookings.attendees(ev.id())).singleElement().satisfies(a -> {
+            assertThat(a.email()).isEqualTo(fan.getEmail());
+            assertThat(a.seats()).containsExactly("A1");
+        });
     }
 
     @Test

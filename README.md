@@ -203,7 +203,7 @@ Seatlock is a marketplace: outside organizers host their own events.
 
 | Role | Can do |
 |---|---|
-| `ADMIN` (super admin) | Every event; review organizer applications; suspend or reinstate organizers; scan any ticket |
+| `ADMIN` (super admin) | Every event (own events and organizers' events kept apart, with each event's bookings); review organizer applications; suspend or reinstate organizers; scan tickets for Seatlock's own events only (organizer events are their staff's job) |
 | `ORGANIZER` | Create, edit and cancel **their own** events, see their sales, add gate staff, scan tickets for their events |
 | `STAFF` | Their organizer's dashboard, read-only, and the check-in scanner for that organizer's events |
 | `USER` | Book, pay, cancel, share |
@@ -212,7 +212,7 @@ Seatlock is a marketplace: outside organizers host their own events.
 2. **Pending = read-only:** the organizer can sign in and look around their dashboard, but creating events, adding staff and check-in are blocked (in the API, not just the UI) until approved. Every super admin gets a "New organizer request" email linking to the review queue.
 3. **Review:** the super admin approves, or requests changes with a note. A rejected application can be edited and resubmitted. Every decision is emailed; approval sends "You're approved".
 4. **Host:** approved organizers create events (live immediately), see bookings, revenue and check-ins per event, and cancel with automatic refunds.
-5. **Staff:** organizers invite gate staff by name and email. Only emails with **no** Seatlock account can be invited, so a customer's or another organizer's account is never turned into a scanner. No account is created up front: the person gets an emailed link (one use, 7 days; only its hash is stored), creates their staff account there, and is attached to that organizer. Organizers can resend or cancel invites; removing a staff member disables that account (signed out everywhere). Staff see their organizer's dashboard read-only, and the scanner refuses tickets for anyone else's events.
+5. **Staff:** organizers invite gate staff by name and email. Because email may not arrive (e.g. Resend before a domain is verified), the invited person can also just sign up as a customer with that email and **accept or decline the invite in the app**; accepting turns the account into a staff account, declining keeps it a customer account and shows the organizer "Declined". Only emails with **no** Seatlock account can be invited, so a customer's or another organizer's account is never turned into a scanner. No account is created up front: the person gets an emailed link (one use, 7 days; only its hash is stored), creates their staff account there, and is attached to that organizer. Organizers can resend or cancel invites; removing a staff member disables that account (signed out everywhere). Staff see their organizer's dashboard read-only, and the scanner refuses tickets for anyone else's events.
 6. **Suspend:** stops the organizer and their staff at once (their dashboard turns read-only); their events stay on sale and can be cancelled by the super admin.
 
 Ownership is enforced in the service layer (`Access`), from the database rather than the JWT's role claim, so a suspension applies immediately; another organizer's event looks exactly like a missing one (404). The frontend picks up a role change by rotating the session (no sign-out needed). Covered by `OrganizerFlowTest`.
@@ -294,7 +294,8 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | DELETE | `/api/events/{id}` (refused with 409 while confirmed bookings exist), `/api/events/{id}/image` | ADMIN |
 | POST | `/api/manage/checkin` `{code, eventId?}` → `ADMITTED` / `ALREADY_CHECKED_IN` (only tickets the scanner may admit) | ADMIN, ORGANIZER, STAFF |
 | GET | `/api/manage/events`: events this user manages, with bookings, revenue and check-ins | ADMIN, ORGANIZER, STAFF |
-| GET | `/api/manage/insights`: bookings and revenue per week (last 8 weeks, IST) and the latest bookings, across the events this user manages | ADMIN, ORGANIZER, STAFF |
+| GET | `/api/manage/insights?scope=own|organizers`: bookings and revenue per week (last 8 weeks, IST) and the latest bookings, across the events this user manages (super admin: Seatlock's own or organizers' events) | ADMIN, ORGANIZER, STAFF |
+| GET | `/api/manage/events/{id}/bookings`: who booked one event (name, email, seats, status; no ticket codes) | ADMIN, ORGANIZER, STAFF |
 | POST | `/api/auth/register-organizer` `{account, organizer}`: organizer account + pending application | public |
 | GET / PUT | `/api/organizer/me`: your application / public profile (edit, resubmit) | ORGANIZER |
 | POST / DELETE | `/api/organizer/me/logo` (multipart `file`; JPEG/PNG/WebP, 1 MB, magic-byte checked; object storage or Postgres like covers) | ORGANIZER |
@@ -304,7 +305,9 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET / POST | `/api/auth/staff-invite?token=` · `/api/auth/staff-invite/accept {token, name, password}`: create the staff account from an invite | public |
 | GET | `/api/admin/organizers?status=` | ADMIN |
 | POST | `/api/admin/organizers/{id}/approve` · `/reject {note}` · `/suspend {note?}` · `/reinstate` | ADMIN |
-| GET | `/api/account/me`; POST `/api/account/password` `{currentPassword, newPassword}` | USER |
+| GET | `/api/account/me`; POST `/api/account/password` `{currentPassword, newPassword}`; POST/DELETE `/api/account/avatar` (profile photo, JPEG/PNG/WebP up to 1 MB) | any signed-in |
+| GET | `/api/account/invites`; POST `/api/account/invites/{id}/accept` · `/decline`: gate staff invites for the signed-in customer's email | USER |
+| GET | `/api/users/{id}/avatar` | any signed-in |
 | GET | `/api/events/{id}/seats` (`HELD` / `mine` reflect live holds) | public |
 | POST | `/api/events` | ADMIN |
 | POST | `/api/events/{id}/image` (multipart `file`, JPEG/PNG/WebP ≤ 2 MB) | ADMIN |
@@ -314,6 +317,7 @@ Admins upload covers as multipart. The server **sniffs magic bytes** and accepts
 | GET | `/api/events/{id}/stream` (Server-Sent Events: `seats` on every change) | public |
 | POST | `/api/payments/checkout` (`Idempotency-Key` optional): a booking, or a Razorpay order to pay | USER |
 | POST | `/api/payments/verify` (Checkout's signed result) | USER |
+| POST | `/api/payments/{orderId}/cancel`: the customer backed out; their held seats are released now | USER |
 | POST | `/api/payments/webhook` (Razorpay, HMAC-signed) | public |
 | POST | `/api/bookings` (`Idempotency-Key` header optional; refused while payments are on) | USER |
 | GET | `/api/bookings/me` (includes `ticketCode` once issued, `status`) | USER |

@@ -86,6 +86,13 @@ public class PaymentService {
         return CheckoutResponse.order(p.getOrderId(), p.getAmountCents(), razorpay.keyId());
     }
 
+    /** The customer backed out of paying: let go of the seats now instead of keeping them for the payment window. */
+    public void cancel(Long userId, String orderId) {
+        payments.findByOrderId(orderId)
+                .filter(p -> p.getUserId().equals(userId) && p.getStatus() == Payment.Status.CREATED)
+                .ifPresent(p -> p.seatIds().forEach(id -> holds.releaseAndNotify(userId, id)));
+    }
+
     /** The browser's Checkout success callback. The signature proves Razorpay produced this payment for this order. */
     public BookingDto verify(Long userId, String orderId, String paymentId, String signature) {
         Payment p = payments.findByOrderId(orderId).filter(x -> x.getUserId().equals(userId))
